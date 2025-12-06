@@ -1,0 +1,315 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Role {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @unique
+  slug        String   @unique
+  rank        Int // higher = more privilege (e.g., WEB_OWNER=100, HOUSE_OWNER=50, FLAT_RENTER=10)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  RolePermission RolePermission[]
+  users          User[]
+}
+
+model User {
+  id   BigInt @id @default(autoincrement())
+  uuid String @unique @db.VarChar(36)
+
+  email String @unique @db.VarChar(255)
+
+  emailVerifiedAt DateTime?
+
+  passwordHash String? @db.VarChar(255)
+  salt         String? @db.VarChar(64)
+
+  googleId String? @unique @db.VarChar(255)
+  locale   String  @default("en") @db.VarChar(8)
+
+  name  String? @db.VarChar(150)
+  phone String? @unique @db.VarChar(50)
+
+  avatarUrl   String? @db.VarChar(1024)
+  profileJson Json?
+
+  roleId   BigInt?
+  parentId BigInt?
+
+  needsPasswordSetup Boolean @default(false)
+
+  status      String    @default("active")
+  lastLoginAt DateTime?
+  lastLoginIp String?   @db.VarChar(45)
+
+  metadata  Json?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  role     Role?  @relation(fields: [roleId], references: [id])
+  parent   User?  @relation("UserParent", fields: [parentId], references: [id])
+  children User[] @relation("UserParent")
+
+  housesOwned                 House[]               @relation("OwnerHouses")
+  caretakerAssignments        CaretakerAssignment[] @relation("CaretakerRelation")
+  createdCaretakerAssignments CaretakerAssignment[] @relation("CreatorRelation")
+
+  refreshTokens        RefreshToken[]
+  devices              Device[]
+  noticesCreated       Notice[]              @relation("UserNotices")
+  rentersCreated       Renter[]              @relation("RenterCreator")
+  notifications        Notification[]
+  pushSubscriptions    PushSubscription[]
+  pushNotificationLogs PushNotificationLog[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model RefreshToken {
+  id        BigInt   @id @default(autoincrement())
+  token     String   @unique
+  userId    BigInt
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model House {
+  id        BigInt   @id @default(autoincrement())
+  uuid      String   @unique @db.VarChar(36)
+  ownerId   BigInt
+  address   String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner User @relation("OwnerHouses", fields: [ownerId], references: [id])
+
+  flats      Flat[]
+  caretakers CaretakerAssignment[]
+  notices    Notice[]
+
+  @@index([ownerId])
+}
+
+model Flat {
+  id      BigInt @id @default(autoincrement())
+  uuid    String @unique @db.VarChar(36)
+  houseId BigInt
+
+  renterId BigInt? @unique
+  renter   Renter? @relation(fields: [renterId], references: [id])
+
+  number    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  house   House    @relation(fields: [houseId], references: [id])
+  notices Notice[]
+
+  @@index([houseId])
+  @@index([renterId])
+}
+
+model Renter {
+  id               BigInt  @id @default(autoincrement())
+  uuid             String  @unique @db.VarChar(36)
+  flat             Flat?
+  name             String
+  phone            String?
+  alternativePhone String?
+  email            String?
+  nid              String?
+  nidFrontImageUrl String?
+  nidBackImageUrl  String?
+  status           String? @default("active")
+  metadata         Json?
+
+  createdBy BigInt?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator User? @relation("RenterCreator", fields: [createdBy], references: [id])
+}
+
+model Permission {
+  id          BigInt   @id @default(autoincrement())
+  key         String   @unique // e.g. "view_maintenance", "manage_keys"
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  RolePermission                 RolePermission[]
+  CaretakerAssignmentPermissions CaretakerAssignmentPermission[]
+}
+
+model RolePermission {
+  id           BigInt   @id @default(autoincrement())
+  roleId       BigInt
+  permissionId BigInt
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([roleId, permissionId])
+}
+
+model CaretakerAssignment {
+  id          BigInt    @id @default(autoincrement())
+  uuid        String    @unique @db.VarChar(36)
+  houseId     BigInt
+  caretakerId BigInt
+  createdBy   BigInt
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+
+  house House @relation(fields: [houseId], references: [id])
+
+  caretaker User @relation("CaretakerRelation", fields: [caretakerId], references: [id])
+
+  creator User @relation("CreatorRelation", fields: [createdBy], references: [id])
+
+  permissions CaretakerAssignmentPermission[]
+
+  @@index([houseId])
+  @@index([caretakerId])
+}
+
+model CaretakerAssignmentPermission {
+  id                    BigInt   @id @default(autoincrement())
+  caretakerAssignmentId BigInt
+  permissionId          BigInt
+  assignedAt            DateTime @default(now())
+
+  caretakerAssignment CaretakerAssignment @relation(fields: [caretakerAssignmentId], references: [id])
+  permission          Permission          @relation(fields: [permissionId], references: [id])
+
+  @@unique([caretakerAssignmentId, permissionId])
+}
+
+model Template {
+  id        BigInt   @id @default(autoincrement())
+  key       String   @unique
+  type      String // "email", "notice"
+  locale    String   @db.VarChar(8)
+  subject   String?
+  content   String
+  createdAt DateTime @default(now())
+}
+
+model Device {
+  id        BigInt   @id @default(autoincrement())
+  uuid      String   @unique @db.VarChar(36)
+  userId    BigInt?
+  endpoint  String   @db.VarChar(1024)
+  p256dh    String   @db.VarChar(512)
+  auth      String   @db.VarChar(512)
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Notice {
+  id   BigInt @id @default(autoincrement())
+  uuid String @unique @db.VarChar(36)
+
+  houseId BigInt?
+  flatId  BigInt?
+
+  title   String
+  content String
+  locale  String @db.VarChar(8)
+
+  createdBy BigInt?
+  createdAt DateTime @default(now())
+
+  house   House? @relation(fields: [houseId], references: [id])
+  flat    Flat?  @relation(fields: [flatId], references: [id])
+  creator User?  @relation("UserNotices", fields: [createdBy], references: [id])
+
+  @@index([houseId])
+  @@index([flatId])
+}
+
+model Notification {
+  id        BigInt    @id @default(autoincrement())
+  uuid      String    @unique @db.VarChar(36)
+  userId    BigInt
+  title     String
+  message   String
+  type      String    @default("info") // info, warning, alert, success
+  read      Boolean   @default(false)
+  metadata  Json?     // { action: 'view_house', id: 1, priority: 'high' }
+  pushSent  Boolean   @default(false)
+  pushError String?
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+  expiresAt DateTime? // When notification expires
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushNotificationLogs PushNotificationLog[]
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@index([type])
+  @@index([pushSent])
+}
+
+model PushSubscription {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  clientType String? // 'desktop' or 'mobile'
+  createdAt DateTime @default(now())
+  expiresAt DateTime? // When subscription expires
+  lastUsed  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushNotificationLogs PushNotificationLog[]
+  
+  @@index([userId])
+  @@index([userId, clientType])
+}
+
+model PushNotificationLog {
+  id            BigInt    @id @default(autoincrement())
+  userId        BigInt
+  title         String
+  body          String
+  data          Json?     // Additional data: { url: '/dashboard', type: 'rent_due', houseId: 1, flatId: 1 }
+  notificationId BigInt?   // Reference to Notification model if exists
+  subscriptionId BigInt?   // Reference to which subscription was used
+  sentAt        DateTime  @default(now())
+  delivered     Boolean   @default(false)
+  deliveredAt   DateTime?
+  opened        Boolean   @default(false)
+  openedAt      DateTime?
+  error         String?
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription  PushSubscription? @relation(fields: [subscriptionId], references: [id])
+  notification  Notification? @relation(fields: [notificationId], references: [id])
+
+  @@index([userId, sentAt])
+  @@index([delivered])
+}
