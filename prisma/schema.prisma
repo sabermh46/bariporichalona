@@ -16,8 +16,9 @@ model Role {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  RolePermission RolePermission[]
-  users          User[]
+  RolePermission   RolePermission[]
+  users            User[]
+  loginAsOriginals UserLoginAs[]    @relation("OriginalRoleLoginAs")
 }
 
 model User {
@@ -69,6 +70,14 @@ model User {
   notifications        Notification[]
   pushSubscriptions    PushSubscription[]
   pushNotificationLogs PushNotificationLog[]
+
+  // Fix: Remove the fields/references from usedRegistrationToken
+  createdRegistrationTokens RegistrationToken[] @relation("TokenCreator")
+  usedRegistrationToken     RegistrationToken?  @relation("TokenUser")
+
+  // Add these for UserLoginAs relations
+  loginAsOrigins UserLoginAs[] @relation("LoginAsUser")
+  loginAsTargets UserLoginAs[] @relation("LoginAsTarget")
 
   @@index([email])
   @@index([phone])
@@ -256,14 +265,14 @@ model Notification {
   message   String
   type      String    @default("info") // info, warning, alert, success
   read      Boolean   @default(false)
-  metadata  Json?     // { action: 'view_house', id: 1, priority: 'high' }
+  metadata  Json? // { action: 'view_house', id: 1, priority: 'high' }
   pushSent  Boolean   @default(false)
   pushError String?
   createdAt DateTime  @default(now())
   readAt    DateTime?
   expiresAt DateTime? // When notification expires
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   pushNotificationLogs PushNotificationLog[]
 
   @@index([userId, read])
@@ -273,43 +282,111 @@ model Notification {
 }
 
 model PushSubscription {
-  id        BigInt   @id @default(autoincrement())
-  userId    BigInt
-  endpoint  String   @unique
-  p256dh    String
-  auth      String
-  userAgent String?
+  id         BigInt    @id @default(autoincrement())
+  userId     BigInt
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
   clientType String? // 'desktop' or 'mobile'
-  createdAt DateTime @default(now())
-  expiresAt DateTime? // When subscription expires
-  lastUsed  DateTime @default(now())
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime? // When subscription expires
+  lastUsed   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   pushNotificationLogs PushNotificationLog[]
-  
+
   @@index([userId])
   @@index([userId, clientType])
 }
 
 model PushNotificationLog {
-  id            BigInt    @id @default(autoincrement())
-  userId        BigInt
-  title         String
-  body          String
-  data          Json?     // Additional data: { url: '/dashboard', type: 'rent_due', houseId: 1, flatId: 1 }
-  notificationId BigInt?   // Reference to Notification model if exists
-  subscriptionId BigInt?   // Reference to which subscription was used
-  sentAt        DateTime  @default(now())
-  delivered     Boolean   @default(false)
-  deliveredAt   DateTime?
-  opened        Boolean   @default(false)
-  openedAt      DateTime?
-  error         String?
+  id             BigInt    @id @default(autoincrement())
+  userId         BigInt
+  title          String
+  body           String
+  data           Json? // Additional data: { url: '/dashboard', type: 'rent_due', houseId: 1, flatId: 1 }
+  notificationId BigInt? // Reference to Notification model if exists
+  subscriptionId BigInt? // Reference to which subscription was used
+  sentAt         DateTime  @default(now())
+  delivered      Boolean   @default(false)
+  deliveredAt    DateTime?
+  opened         Boolean   @default(false)
+  openedAt       DateTime?
+  error          String?
 
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subscription  PushSubscription? @relation(fields: [subscriptionId], references: [id])
-  notification  Notification? @relation(fields: [notificationId], references: [id])
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription PushSubscription? @relation(fields: [subscriptionId], references: [id])
+  notification Notification?     @relation(fields: [notificationId], references: [id])
 
   @@index([userId, sentAt])
   @@index([delivered])
+}
+
+model SystemSetting {
+  id        BigInt   @id @default(autoincrement())
+  key       String   @unique
+  value     Json // Can store boolean, number, string, or array
+  type      String   @default("string") // "boolean", "number", "string", "array", "object"
+  category  String   @default("general")
+  isPublic  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+  @@index([category])
+}
+
+model RegistrationToken {
+  id        BigInt    @id @default(autoincrement())
+  token     String    @unique
+  createdBy BigInt // User who created this token
+  email     String? // Specific email if token is for specific user
+  roleSlug  String // Role to assign when registering with this token
+  expiresAt DateTime
+  used      Boolean   @default(false)
+  usedAt    DateTime?
+  usedBy    BigInt?   @unique // Add @unique here for one-to-one relation
+  metadata  Json? // Additional data: { houseLimit: 5, permissions: [...] }
+  createdAt DateTime  @default(now())
+
+  creator User  @relation("TokenCreator", fields: [createdBy], references: [id])
+  user    User? @relation("TokenUser", fields: [usedBy], references: [id])
+
+  @@index([token])
+  @@index([createdBy])
+  @@index([used])
+  @@index([expiresAt])
+}
+
+model RoleLimit {
+  id            BigInt   @id @default(autoincrement())
+  roleSlug      String   @unique
+  maxHouses     Int      @default(1) // Maximum houses this role can create
+  maxCaretakers Int      @default(2) // Maximum caretakers per house
+  maxFlats      Int      @default(10) // Maximum flats per house
+  canLoginAs    Json? // Roles they can login as: ["house_owner", "caretaker"]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([roleSlug])
+}
+
+model UserLoginAs {
+  id             BigInt   @id @default(autoincrement())
+  userId         BigInt // User who is logging in as someone else
+  targetUserId   BigInt // User they are logging in as
+  originalRoleId BigInt // Their original role
+  reason         String?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  user         User @relation("LoginAsUser", fields: [userId], references: [id])
+  targetUser   User @relation("LoginAsTarget", fields: [targetUserId], references: [id])
+  originalRole Role @relation("OriginalRoleLoginAs", fields: [originalRoleId], references: [id])
+
+  @@unique([userId, targetUserId])
+  @@index([userId])
+  @@index([targetUserId])
+  @@index([expiresAt])
 }
