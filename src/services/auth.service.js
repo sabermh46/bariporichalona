@@ -3,7 +3,7 @@ const { hashPassword, verifyPassword } = require("../utils/password");
 const { createTokens } = require("../utils/tokens");
 const { v4: uuid } = require("uuid");
 const { validateRegistrationData } = require("../utils/validateRegistrationData");
-
+const jwt = require("jsonwebtoken");
 
 exports.register = async(data) => {
 
@@ -48,7 +48,7 @@ exports.register = async(data) => {
       passwordHash: hash,
       salt,
       name,
-      phone,
+      phone: phone === "" ? null : phone,
       needsPasswordSetup: false,
       roleId: null, //recheck this later
     }
@@ -90,15 +90,25 @@ exports.login = async(data) => {
 }
 
 
-exports.linkGoogleAccount = async(userId, googleId) => {
+exports.linkGoogleAccount = async (userId, googleId) => {
+  // Prevent duplicate Google usage
+  const existingGoogleUser = await prisma.user.findFirst({
+    where: { googleId }
+  });
+
+  if (existingGoogleUser) {
+    throw new Error("This Google account is already linked to another user");
+  }
+
   return await prisma.user.update({
     where: { id: userId },
     data: {
-      googleId: googleId,
+      googleId,
       emailVerifiedAt: new Date(),
     }
-  })
-}
+  });
+};
+
 
 
 exports.setPassword = async (userId, password) => {
@@ -116,14 +126,68 @@ exports.setPassword = async (userId, password) => {
 
 
 
-exports.canLinkAccount = async (email, googleId) => {
-  const emailUser = await prisma.user.findFirst({ where: { email, googleId: null } });
 
-  const googleUser = await prisma.user.findFirst({ where: { googleId } });
+exports.refreshToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
 
-  return {
-    canLink: !!emailUser && !googleUser,
-    emailUser,
-    googleUser
+    if (!refreshToken) {
+      return res.status(401).json({ message: "Refresh token missing" });
+    }
+
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH);
+
+    const tokens = await createTokens(decoded.userId);
+
+    return res.json({
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
+  } catch (error) {
+    return res.status(401).json({ message: "Invalid or expired refresh token" });
   }
-}
+};
+
+
+
+
+exports.canLinkAccount = async (email, googleId) => {
+
+
+  const emailUser = await prisma.user.findFirst({
+    where: { email }
+  });
+
+  if (!emailUser) {
+    return {
+      canLink: false,
+      reason: "No email-based account found"
+    };
+  }
+
+  // 2. If already linked → block
+  if (emailUser.googleId) {
+    return {
+      canLink: false,
+      reason: "This email is already linked to a Google account"
+    };
+  }
+
+  // 3. Ensure this Google account is not already linked to another user
+  const existingGoogleLink = await prisma.user.findFirst({
+    where: { googleId }
+  });
+
+  if (existingGoogleLink) {
+    return {
+      canLink: false,
+      reason: "This Google account is already linked to another user"
+    };
+  }
+
+  // ✅ Safe to link
+  return {
+    canLink: true,
+    emailUserId: emailUser.id
+  };
+};
