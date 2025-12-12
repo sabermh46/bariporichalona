@@ -64,6 +64,7 @@ router.post("/set-password", authMiddleware, AuthController.setPassword);
 router.post("/link-google", authMiddleware, AuthController.linkGoogleAccount);
 router.post("/check-link", AuthController.checkAccountLink); // indicating this line
 router.post("/refresh", AuthController.refreshToken);
+router.get("/public-registration-status", AuthController.getPublicRegistrationStatus);
 
 
 module.exports = router;

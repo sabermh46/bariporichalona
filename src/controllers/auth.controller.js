@@ -79,7 +79,7 @@ class AuthController {
       
       const result = await AuthService.generateRegistrationToken(req.user.id, {
         email,
-        roleSlug: roleSlug || 'flat_renter',
+        roleSlug: roleSlug || 'house_owner',
         expiresInHours: expiresInHours || 24,
         metadata: metadata || {}
       });
@@ -94,6 +94,9 @@ class AuthController {
   async validateToken(req, res) {
     try {
       const { token, email } = req.body;
+
+      console.log(req.body);
+      
       
       const tokenData = await AuthService.validateRegistrationToken(token, email);
       
@@ -270,6 +273,15 @@ class AuthController {
       });
 
       res.json(serializeBigInt(setting));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getPublicRegistrationStatus(req, res) {
+    try {
+      const isEnabled = await AuthService.getSettings('registration.public_enabled', false);
+      res.json({ publicRegistrationEnabled: isEnabled });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

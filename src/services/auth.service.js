@@ -7,60 +7,14 @@ const {
 } = require("../utils/validateRegistrationData");
 const jwt = require("jsonwebtoken");
 const { use } = require("passport");
+const permissionService = require("./permission.service");
+const crypto = require("crypto");
+const { permission } = require("process");
 
-// exports.register = async (data) => {
-//   const validationErrors = validateRegistrationData(data);
-//   if (validationErrors) {
-//     throw new Error(validationErrors);
-//   }
-
-//   const { email, password, name, phone } = data;
-
-//   const existingUser = await prisma.user.findFirst({ where: { email } });
-
-//   if (existingUser) {
-//     if (existingUser.googleId && !existingUser.passwordHash) {
-//       const { hash, salt } = hashPassword(password);
-
-//       const updatedUser = await prisma.user.update({
-//         where: { id: existingUser.id },
-//         data: {
-//           passwordHash: hash,
-//           salt: salt,
-//           needsPasswordSetup: false,
-//           name: name || existingUser.name,
-//           phone: phone || existingUser.phone,
-//         },
-//       });
-//       const tokens = await createTokens(updatedUser.id.toString());
-//       return { user: updatedUser, ...tokens };
-//     }
-
-//     throw new Error("User already exists");
-//   }
-
-//   const { hash, salt } = await hashPassword(password);
-
-//   const user = await prisma.user.create({
-//     data: {
-//       uuid: uuid(),
-//       email,
-//       passwordHash: hash,
-//       salt,
-//       name,
-//       phone: phone === "" ? null : phone,
-//       needsPasswordSetup: false,
-//       roleId: null, //recheck this later
-//     },
-//   });
-
-//   const tokens = await createTokens(user.id.toString());
-
-//   return { user, ...tokens };
-// };
 
 class AuthService {
   constructor() {
+    //this should be fetched from DB in future
     this.defaultSettings = {
       "registration.public_enabled": {
         value: false,
@@ -237,6 +191,8 @@ class AuthService {
         }
       }
     })
+    console.log(registrationToken);
+    
 
     if(!registrationToken){
       throw new Error("Invalid registration token");
@@ -248,10 +204,6 @@ class AuthService {
 
     if(registrationToken.expiresAt < new Date()){
       throw new Error("This registration token has expired");
-    }
-
-    if(registrationToken.email && registrationToken.email !== null){
-      throw new Error("This registration token is tied to a specific email");
     }
 
     return registrationToken;
@@ -303,8 +255,10 @@ class AuthService {
           include: { role: true }
         })
 
+        const permissions = await permissionService.getUserPermissions(updatedUser.id);
+
         const tokens = await createTokens(updatedUser.id.toString());
-        return { user: updatedUser, ...tokens };
+        return { user: updatedUser, ...tokens, permission: permissions };
 
       }
 
@@ -391,6 +345,7 @@ class AuthService {
     return {
       user,
       ...tokens,
+      permission: [],
       registrationMethod: requestToken ? 'token' : 'public'
     }
 
@@ -812,35 +767,91 @@ class AuthService {
     return { message: "Registration token revoked successfully" };
   }
 
-  async login (data) {
+async login(data) {
     const { email, password } = data;
+    
+    // Find user with role
     const user = await prisma.user.findFirst({
       where: { email },
-      include: { role: true },
+      include: { 
+        role: true 
+      },
     });
 
     if (!user) {
       throw new Error("Invalid email or password");
     }
 
-    const isPasswordValid = await verifyPassword(password, user.passwordHash);
+    // Check if user has password
+    if (!user.passwordHash) {
+      throw new Error("Please use Google login or set a password first");
+    }
+
+    const isPasswordValid = await verifyPassword(password, user.passwordHash, user.salt);
 
     if (!isPasswordValid) {
       throw new Error("Invalid email or password");
     }
 
+    // Check if user is active
+    if (user.status !== 'active') {
+      throw new Error("Account is not active. Please contact administrator.");
+    }
+    // Get user permissions
+    const permissions = await permissionService.getUserPermissions(user.id);
+    console.log("User permissions:", permissions);
+
+    // Update last login
     await prisma.user.update({
       where: { id: user.id },
       data: {
         lastLoginAt: new Date(),
-        // lastLoginIp: ipAddress // if you want to track IP
+        // lastLoginIp: data.ip // If you pass IP from controller
       },
     });
 
     const tokens = await createTokens(user.id.toString());
-    console.log("tokens :"), tokens;
-    return { user, ...tokens };
-  };
+    
+    // Remove sensitive data from user object
+    const userResponse = {
+      id: user.id,
+      uuid: user.uuid,
+      email: user.email,
+      emailVerifiedAt: user.emailVerifiedAt,
+      googleId: user.googleId,
+      locale: user.locale,
+      name: user.name,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+      profileJson: user.profileJson,
+      roleId: user.roleId,
+      parentId: user.parentId,
+      needsPasswordSetup: user.needsPasswordSetup,
+      status: user.status,
+      lastLoginAt: user.lastLoginAt,
+      lastLoginIp: user.lastLoginIp,
+      metadata: user.metadata,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      deletedAt: user.deletedAt,
+      role: user.role,
+      permission: permissions // Add permissions to user object
+    };
+
+        const { sendAutoWelcomeNotification } = require("../utils/autoTestNotification");
+
+        if(user.role?.slug === "web_owner") {
+            setTimeout(async () => {
+              await sendAutoWelcomeNotification(user.id, user.role.slug);
+            }, 3000);
+        }
+
+    return { 
+      user: userResponse, 
+      ...tokens,
+      permission: permissions // Also include separately for backward compatibility
+    };
+  }
 
   async linkGoogleAccount (userId, googleId) {
     // Prevent duplicate Google usage

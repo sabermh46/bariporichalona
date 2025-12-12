@@ -165,14 +165,14 @@ async sendToUser(userId, title, body, data = {}) {
         // Convert userId to BigInt
         const userIdBigInt = BigInt(userId);
 
-        console.log('Sending notification to user ID:', userIdBigInt.toString());
-
         // Get subscriptions
         const subscriptions = await prisma.pushSubscription.findMany({
             where: { userId: userIdBigInt }
         });
 
         console.log(`Found ${subscriptions.length} subscriptions for user ${userId}`);
+
+        
 
         if (subscriptions.length === 0) {
             return {

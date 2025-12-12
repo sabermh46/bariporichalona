@@ -71,13 +71,15 @@ model User {
   pushSubscriptions    PushSubscription[]
   pushNotificationLogs PushNotificationLog[]
 
-  // Fix: Remove the fields/references from usedRegistrationToken
   createdRegistrationTokens RegistrationToken[] @relation("TokenCreator")
   usedRegistrationToken     RegistrationToken?  @relation("TokenUser")
 
-  // Add these for UserLoginAs relations
   loginAsOrigins UserLoginAs[] @relation("LoginAsUser")
   loginAsTargets UserLoginAs[] @relation("LoginAsTarget")
+
+  staffPermissionsGranted  StaffPermission[] @relation("PermissionGranter")
+  staffPermissionsRevoked  StaffPermission[] @relation("PermissionRevoker")
+  staffPermissionsAssigned StaffPermission[] @relation("PermissionUser")
 
   @@index([email])
   @@index([phone])
@@ -162,6 +164,7 @@ model Permission {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  staffPermissions               StaffPermission[]
   RolePermission                 RolePermission[]
   CaretakerAssignmentPermissions CaretakerAssignmentPermission[]
 }
@@ -389,4 +392,24 @@ model UserLoginAs {
   @@index([userId])
   @@index([targetUserId])
   @@index([expiresAt])
+}
+
+model StaffPermission {
+  id           BigInt    @id @default(autoincrement())
+  userId       BigInt
+  permissionId BigInt
+  grantedBy    BigInt
+  grantedAt    DateTime  @default(now())
+  revokedAt    DateTime?
+  revokedBy    BigInt?
+
+  user       User       @relation("PermissionUser", fields: [userId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+  granter    User       @relation("PermissionGranter", fields: [grantedBy], references: [id])
+  revoker    User?      @relation("PermissionRevoker", fields: [revokedBy], references: [id])
+
+  @@unique([userId, permissionId])
+  @@index([userId])
+  @@index([permissionId])
+  @@index([grantedAt])
 }

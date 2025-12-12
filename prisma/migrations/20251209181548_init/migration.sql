@@ -349,6 +349,23 @@ CREATE TABLE `UserLoginAs` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- CreateTable
+CREATE TABLE `StaffPermission` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `userId` BIGINT NOT NULL,
+    `permissionId` BIGINT NOT NULL,
+    `grantedBy` BIGINT NOT NULL,
+    `grantedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `revokedAt` DATETIME(3) NULL,
+    `revokedBy` BIGINT NULL,
+
+    INDEX `StaffPermission_userId_idx`(`userId`),
+    INDEX `StaffPermission_permissionId_idx`(`permissionId`),
+    INDEX `StaffPermission_grantedAt_idx`(`grantedAt`),
+    UNIQUE INDEX `StaffPermission_userId_permissionId_key`(`userId`, `permissionId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 -- AddForeignKey
 ALTER TABLE `User` ADD CONSTRAINT `User_roleId_fkey` FOREIGN KEY (`roleId`) REFERENCES `Role`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
@@ -432,3 +449,15 @@ ALTER TABLE `UserLoginAs` ADD CONSTRAINT `UserLoginAs_targetUserId_fkey` FOREIGN
 
 -- AddForeignKey
 ALTER TABLE `UserLoginAs` ADD CONSTRAINT `UserLoginAs_originalRoleId_fkey` FOREIGN KEY (`originalRoleId`) REFERENCES `Role`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `StaffPermission` ADD CONSTRAINT `StaffPermission_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `StaffPermission` ADD CONSTRAINT `StaffPermission_permissionId_fkey` FOREIGN KEY (`permissionId`) REFERENCES `Permission`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `StaffPermission` ADD CONSTRAINT `StaffPermission_grantedBy_fkey` FOREIGN KEY (`grantedBy`) REFERENCES `User`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `StaffPermission` ADD CONSTRAINT `StaffPermission_revokedBy_fkey` FOREIGN KEY (`revokedBy`) REFERENCES `User`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;

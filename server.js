@@ -23,7 +23,7 @@ app.use(cookieParser());
 app.use(bigIntSerializer);
 app.use(
   cors({
-    origin: "http://localhost:3005",
+    origin: ["http://localhost:3005", '**.ngrok-free.app'],
     methods: "GET,POST,PUT,DELETE",
     credentials: true, 
   })
@@ -41,6 +41,7 @@ app.use(passport.session());
 
 const authRoute = require("./src/routes/auth.routes");
 const googleRoute = require("./src/routes/google.routes");
+const apiCacheRoutes = require('./src/routes/cache.routes');
 
 
 
@@ -49,6 +50,7 @@ app.use("/auth", authRoute);
 app.use("/push", pushRoutes);
 app.use("/test", testRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/cache', apiCacheRoutes);
 
 
 

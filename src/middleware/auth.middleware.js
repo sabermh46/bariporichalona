@@ -1,5 +1,11 @@
+// middlewares/auth.middleware.js
 const jwt = require("jsonwebtoken");
 const prisma = require("../config/prisma");
+const permissionService = require("../services/permission.service");
+
+// Cache for basic user data (without permissions)
+const userCache = new Map();
+const USER_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
 const authMiddleware = async (req, res, next) => {
     try {
@@ -31,16 +37,11 @@ const authMiddleware = async (req, res, next) => {
             });
         }
 
-        console.log('Auth middleware - Token received:', token.substring(0, 20) + '...');
-
         // Verify token
         let decoded;
         try {
             decoded = jwt.verify(token, process.env.JWT_SECRET);
-            console.log('Token decoded successfully. User ID:', decoded.userId);
         } catch (jwtError) {
-            console.error('JWT verification failed:', jwtError.message);
-            
             if (jwtError.name === 'TokenExpiredError') {
                 return res.status(401).json({
                     success: false,
@@ -73,30 +74,63 @@ const authMiddleware = async (req, res, next) => {
             });
         }
 
-        // Find user with role
+        const userId = BigInt(decoded.userId);
+        
+        // Try to get user from cache first
         let user;
-        try {
+        const cachedUser = userCache.get(userId.toString());
+        
+        if (cachedUser && (Date.now() - cachedUser.timestamp < USER_CACHE_TTL)) {
+            user = cachedUser.data;
+        } else {
+            // Find user with basic info (without permissions for now)
             user = await prisma.user.findUnique({ 
-                where: { id: BigInt(decoded.userId) },
-                include: { 
-                    role: true 
+                where: { id: userId },
+                select: { 
+                    id: true,
+                    uuid: true,
+                    email: true,
+                    emailVerifiedAt: true,
+                    googleId: true,
+                    locale: true,
+                    name: true,
+                    phone: true,
+                    avatarUrl: true,
+                    profileJson: true,
+                    roleId: true,
+                    parentId: true,
+                    needsPasswordSetup: true,
+                    status: true,
+                    lastLoginAt: true,
+                    lastLoginIp: true,
+                    metadata: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    deletedAt: true,
+                    role: {
+                        select: {
+                            id: true,
+                            name: true,
+                            slug: true,
+                            rank: true,
+                            description: true
+                        }
+                    }
                 }
             });
-        } catch (dbError) {
-            console.error('Database error when fetching user:', dbError);
-            return res.status(500).json({
-                success: false,
-                error: "Database error",
-                code: "DATABASE_ERROR"
-            });
-        }
 
-        if (!user) {
-            console.error('User not found for ID:', decoded.userId);
-            return res.status(401).json({ 
-                success: false,
-                error: "User not found.",
-                code: "USER_NOT_FOUND"
+            if (!user) {
+                return res.status(401).json({ 
+                    success: false,
+                    error: "User not found.",
+                    code: "USER_NOT_FOUND"
+                });
+            }
+
+            // Cache the user
+            userCache.set(userId.toString(), {
+                data: user,
+                timestamp: Date.now()
             });
         }
 
@@ -109,50 +143,24 @@ const authMiddleware = async (req, res, next) => {
             });
         }
 
-        // Remove sensitive data
-        const userData = {
-            id: user.id,
-            uuid: user.uuid,
-            email: user.email,
-            emailVerifiedAt: user.emailVerifiedAt,
-            googleId: user.googleId,
-            locale: user.locale,
-            name: user.name,
-            phone: user.phone,
-            avatarUrl: user.avatarUrl,
-            profileJson: user.profileJson,
-            roleId: user.roleId,
-            parentId: user.parentId,
-            needsPasswordSetup: user.needsPasswordSetup,
-            status: user.status,
-            lastLoginAt: user.lastLoginAt,
-            lastLoginIp: user.lastLoginIp,
-            metadata: user.metadata,
-            createdAt: user.createdAt,
-            updatedAt: user.updatedAt,
-            deletedAt: user.deletedAt,
-            role: user.role
-        };
+        // Get user permissions (optimized with caching)
+        const permissions = await permissionService.getUserPermissions(user.id);
 
-        // Attach user to request
-        req.user = userData;
+        // Attach user and permissions to request
+        req.user = {
+            ...user,
+            permissions: permissions
+        };
         
-        // Also attach prisma instance if needed by other middleware
+        // Set prisma instance if needed
         if (!req.prisma) {
             req.prisma = prisma;
         }
 
-        console.log('Auth successful for user:', {
-            id: String(userData.id),
-            email: userData.email,
-            role: userData.role?.slug || 'No role'
-        });
-
         next();
     } catch (error) {
-        console.error('Auth middleware unexpected error:', error);
+        console.error('Auth middleware error:', error);
         
-        // Don't expose internal error details in production
         const errorMessage = process.env.NODE_ENV === 'development' 
             ? error.message 
             : "Authentication failed";
@@ -164,5 +172,14 @@ const authMiddleware = async (req, res, next) => {
         });
     }
 }
+
+// Export cache clearing function for admin
+authMiddleware.clearUserCache = (userId) => {
+    if (userId) {
+        userCache.delete(userId.toString());
+    } else {
+        userCache.clear();
+    }
+};
 
 module.exports = authMiddleware;
