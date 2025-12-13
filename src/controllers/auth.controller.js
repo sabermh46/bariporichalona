@@ -93,11 +93,7 @@ class AuthController {
   // Validate registration token
   async validateToken(req, res) {
     try {
-      const { token, email } = req.body;
-
-      console.log(req.body);
-      
-      
+      const { token, email } = req.body;      
       const tokenData = await AuthService.validateRegistrationToken(token, email);
       
       res.json(serializeBigInt({

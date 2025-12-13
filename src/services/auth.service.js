@@ -191,7 +191,7 @@ class AuthService {
         }
       }
     })
-    console.log(registrationToken);
+
     
 
     if(!registrationToken){
@@ -799,7 +799,6 @@ async login(data) {
     }
     // Get user permissions
     const permissions = await permissionService.getUserPermissions(user.id);
-    console.log("User permissions:", permissions);
 
     // Update last login
     await prisma.user.update({

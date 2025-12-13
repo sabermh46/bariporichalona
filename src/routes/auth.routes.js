@@ -7,15 +7,15 @@ router.post("/register", AuthController.register);
 router.post('/validate-token', AuthController.validateToken);
 router.get('/settings', AuthController.getSystemSettings);
 
-router.post('/generate-token', authMiddleware, roleMiddleware(['web_owner', 'staff', 'house_owner']), AuthController.generateToken);
+router.post('/generate-token', authMiddleware, roleMiddleware(['web_owner', 'staff']), AuthController.generateToken);
 router.post('/create-user', 
     authMiddleware,
-    roleMiddleware(['web_owner', 'staff', 'house_owner']),
+    roleMiddleware(['web_owner', 'staff']),
     AuthController.createUser
 )
 router.post('/login-as',
     authMiddleware,
-    roleMiddleware(['web_owner', 'staff', 'house_owner']),
+    roleMiddleware(['web_owner', 'staff']),
     AuthController.loginAs
 )
 router.post('/exit-login-as',
@@ -25,7 +25,7 @@ router.post('/exit-login-as',
 
 router.get('/managed-users',
   authMiddleware,
-  roleMiddleware(['web_owner', 'staff', 'house_owner']),
+  roleMiddleware(['web_owner', 'staff']),
   AuthController.getManagedUsers
 );
 
@@ -37,13 +37,13 @@ router.put('/user/:userId/limits',
 
 router.get('/registration-tokens',
   authMiddleware,
-  roleMiddleware(['web_owner', 'staff', 'house_owner']),
+  roleMiddleware(['web_owner', 'staff']),
   AuthController.getRegistrationTokens
 );
 
 router.delete('/registration-token/:tokenId',
   authMiddleware,
-  roleMiddleware(['web_owner', 'staff', 'house_owner']),
+  roleMiddleware(['web_owner', 'staff']),
   AuthController.revokeRegistrationToken
 );
 

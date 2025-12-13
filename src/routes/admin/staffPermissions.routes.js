@@ -17,11 +17,11 @@ router.get('/staff/:staffId/history', StaffPermissionController.getPermissionHis
 router.put('/staff/:staffId/status', StaffPermissionController.updateStaffStatus);
 
 // Permission management routes
-router.get('/permissions', StaffPermissionController.getAvailablePermissions);
+router.get('/', StaffPermissionController.getAvailablePermissions);
 router.post('/staff/:staffId/permissions', StaffPermissionController.grantPermission);
 router.delete('/staff/:staffId/permissions/:permissionId', StaffPermissionController.revokePermission);
 router.post('/staff/:staffId/permissions/bulk', StaffPermissionController.bulkGrantPermissions);
 router.delete('/staff/:staffId/permissions/bulk', StaffPermissionController.bulkRevokePermissions);
-router.post('/permissions/copy', StaffPermissionController.copyPermissions);
+router.post('/copy', StaffPermissionController.copyPermissions);
 
 module.exports = router;
