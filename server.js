@@ -42,6 +42,8 @@ app.use(passport.session());
 const authRoute = require("./src/routes/auth.routes");
 const googleRoute = require("./src/routes/google.routes");
 const apiCacheRoutes = require('./src/routes/cache.routes');
+const staffPermissionRoutes = require('./src/routes/admin/staffPermissions.routes');
+const houseRoutes = require('./src/routes/house.routes');
 
 
 
@@ -51,6 +53,8 @@ app.use("/push", pushRoutes);
 app.use("/test", testRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/cache', apiCacheRoutes);
+app.use('/admin/permissions', staffPermissionRoutes);
+app.use('/houses', houseRoutes);
 
 
 

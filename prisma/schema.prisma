@@ -106,6 +106,7 @@ model House {
   metadata  Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  flatCount BigInt
 
   owner User @relation("OwnerHouses", fields: [ownerId], references: [id])
 
@@ -120,6 +121,8 @@ model Flat {
   id      BigInt @id @default(autoincrement())
   uuid    String @unique @db.VarChar(36)
   houseId BigInt
+
+  name String
 
   renterId BigInt? @unique
   renter   Renter? @relation(fields: [renterId], references: [id])
