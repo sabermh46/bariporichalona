@@ -106,7 +106,8 @@ model House {
   metadata  Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  flatCount BigInt
+  flatCount BigInt   @default(0)
+  active    Boolean  @default(false)
 
   owner User @relation("OwnerHouses", fields: [ownerId], references: [id])
 

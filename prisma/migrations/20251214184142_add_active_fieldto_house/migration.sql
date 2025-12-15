@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `house` ADD COLUMN `active` BOOLEAN NOT NULL DEFAULT false,
+    MODIFY `flatCount` BIGINT NOT NULL DEFAULT 0;

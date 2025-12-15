@@ -13,7 +13,8 @@ class HouseController {
                 ownerId, 
                 address, 
                 flatCount = 1,
-                metadata = {} 
+                metadata = {},
+                active = true // Default true for web_owner, false for others
             } = req.body;
 
             // Validate required fields
@@ -51,10 +52,12 @@ class HouseController {
             // Check permissions based on user role
             const currentUser = req.user;
             let hasPermission = false;
+            let canSetActive = false;
 
             if (currentUser.role.slug === 'web_owner') {
                 // Web owner can create houses for any house owner
                 hasPermission = true;
+                canSetActive = true;
             } 
             else if (currentUser.role.slug === 'staff') {
                 // Staff needs houses.create permission
@@ -74,6 +77,7 @@ class HouseController {
                         });
                     }
                 }
+                canSetActive = false; // Staff creates inactive houses
             }
             else if (currentUser.role.slug === 'house_owner') {
                 // House owner can only create for themselves
@@ -89,6 +93,7 @@ class HouseController {
                     currentUser.id, 
                     'houses.create'
                 );
+                canSetActive = false; // House owner creates inactive houses
             }
             else {
                 return res.status(403).json({
@@ -119,6 +124,9 @@ class HouseController {
                 });
             }
 
+            // Set active status based on role
+            const houseActive = canSetActive ? (active === true) : false;
+
             // Create the house
             const house = await prisma.house.create({
                 data: {
@@ -126,11 +134,14 @@ class HouseController {
                     ownerId: parsedOwnerId,
                     address,
                     flatCount: BigInt(flatCount),
+                    active: houseActive,
+                    createdAt: new Date().toISOString(),
                     metadata: {
                         ...metadata,
                         createdByUserId: currentUser.id,
                         createdByRole: currentUser.role.slug,
-                        createdAt: new Date().toISOString()
+                        createdAt: new Date().toISOString(),
+                        initialActiveStatus: houseActive
                     }
                 },
                 include: {
@@ -177,6 +188,291 @@ class HouseController {
                 error: 'Failed to create house' 
             });
         }
+    }
+
+    // Update house with new permission checks
+    async updateHouse(req, res) {
+        try {
+            const { id } = req.params;
+            const { address, flatCount, metadata, active } = req.body;
+
+            // Check if house exists
+            const house = await prisma.house.findUnique({
+                where: { id: BigInt(id) }
+            });
+
+            if (!house) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'House not found'
+                });
+            }
+
+            const currentUser = req.user;
+            let canUpdate = false;
+            let allowedFields = { address: false, flatCount: false, metadata: false, active: false };
+
+            // Check permissions based on role
+            if (currentUser.role.slug === 'web_owner') {
+                canUpdate = true;
+                allowedFields = { address: true, flatCount: true, metadata: true, active: true };
+            } 
+            else if (currentUser.role.slug === 'house_owner') {
+                // House owner can only update their own houses
+                if (house.ownerId !== currentUser.id) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'You can only update your own houses'
+                    });
+                }
+                
+                // Check if house owner has houses.edit.own permission
+                canUpdate = await permissionService.hasPermission(
+                    currentUser.id, 
+                    'houses.edit.own'
+                );
+                allowedFields = { address: true, flatCount: true, metadata: true, active: false };
+            }
+            else if (currentUser.role.slug === 'staff') {
+                // Staff has two ways to update:
+                // 1. With house.update.any permission (can update any house, but only address)
+                // 2. With houses.edit permission AND hierarchy check (can update full fields for managed houses)
+                
+                const hasUpdateAnyPermission = await permissionService.hasPermission(
+                    currentUser.id,
+                    'house.update.any'
+                );
+                
+                if (hasUpdateAnyPermission) {
+                    canUpdate = true;
+                    allowedFields = { address: true, flatCount: false, metadata: false, active: false };
+                } else {
+                    // Check regular houses.edit permission
+                    canUpdate = await permissionService.hasPermission(
+                        currentUser.id,
+                        'houses.edit'
+                    );
+                    
+                    if (canUpdate) {
+                        // Check if staff manages this house owner
+                        const isManaged = await this.checkUserHierarchy(currentUser.id, house.ownerId);
+                        if (!isManaged) {
+                            return res.status(403).json({
+                                success: false,
+                                error: 'You can only update houses of owners under your management'
+                            });
+                        }
+                        allowedFields = { address: true, flatCount: true, metadata: true, active: false };
+                    }
+                }
+            } else {
+                return res.status(403).json({
+                    success: false,
+                    error: 'You do not have permission to update houses'
+                });
+            }
+
+            if (!canUpdate) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Insufficient permissions to update this house'
+                });
+            }
+
+            // Prepare update data based on allowed fields
+            const updateData = {};
+            if (address !== undefined && allowedFields.address) {
+                updateData.address = address;
+            }
+            if (flatCount !== undefined && allowedFields.flatCount) {
+                updateData.flatCount = BigInt(flatCount);
+            }
+            if (active !== undefined && allowedFields.active) {
+                updateData.active = active;
+            }
+            
+            if (metadata !== undefined && allowedFields.metadata) {
+                updateData.metadata = {
+                    ...house.metadata,
+                    ...metadata,
+                    updatedByUserId: currentUser.id,
+                    updatedByRole: currentUser.role.slug,
+                    updatedAt: new Date().toISOString()
+                };
+            } else if (Object.keys(updateData).length > 0) {
+                // Still update metadata with update info even if metadata not changed
+                updateData.metadata = {
+                    ...house.metadata,
+                    updatedByUserId: currentUser.id,
+                    updatedByRole: currentUser.role.slug,
+                    updatedAt: new Date().toISOString()
+                };
+            }
+
+            // Check if there are fields to update
+            if (Object.keys(updateData).length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No valid fields to update or insufficient permissions for specified fields'
+                });
+            }
+
+            const updatedHouse = await prisma.house.update({
+                where: { id: BigInt(id) },
+                data: updateData,
+                include: {
+                    owner: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true
+                        }
+                    }
+                }
+            });
+
+            res.json({
+                success: true,
+                message: 'House updated successfully',
+                data: updatedHouse
+            });
+        } catch (error) {
+            console.error('Update house error:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Failed to update house' 
+            });
+        }
+    }
+
+    // Delete house - only web_owner can delete
+    async deleteHouse(req, res) {
+        try {
+            const { id } = req.params;
+
+            // Check if house exists
+            const house = await prisma.house.findUnique({
+                where: { id: BigInt(id) }
+            });
+
+            if (!house) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'House not found'
+                });
+            }
+
+            // Only web_owner can delete houses
+            if (req.user.role.slug !== 'web_owner') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Only web owner can delete houses'
+                });
+            }
+
+            // Check if house has flats
+            const flatCount = await prisma.flat.count({
+                where: { houseId: BigInt(id) }
+            });
+
+            if (flatCount > 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Cannot delete house that has flats. Delete flats first.'
+                });
+            }
+
+            // Check if house has caretakers assigned
+            const caretakerCount = await prisma.caretakerAssignment.count({
+                where: { houseId: BigInt(id) }
+            });
+
+            if (caretakerCount > 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Cannot delete house that has caretakers assigned. Remove caretakers first.'
+                });
+            }
+
+            // Permanent delete (not soft delete since only web_owner can do this)
+            await prisma.house.delete({
+                where: { id: BigInt(id) }
+            });
+
+            // Log the deletion in owner's metadata
+            await prisma.user.update({
+                where: { id: house.ownerId },
+                data: {
+                    metadata: {
+                        ...(await prisma.user.findUnique({
+                            where: { id: house.ownerId }
+                        })).metadata,
+                        housesDeleted: {
+                            houseId: id.toString(),
+                            deletedAt: new Date().toISOString(),
+                            deletedBy: req.user.id
+                        }
+                    }
+                }
+            });
+
+            res.json({
+                success: true,
+                message: 'House deleted permanently',
+                data: { id: id.toString() }
+            });
+        } catch (error) {
+            console.error('Delete house error:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Failed to delete house' 
+            });
+        }
+    }
+
+    // Helper: Check user hierarchy (staff managing house owner)
+    async checkUserHierarchy(parentId, childId) {
+        const child = await prisma.user.findUnique({
+            where: { id: childId },
+            include: { parent: true }
+        });
+
+        if (!child) return false;
+        if (child.parentId === parentId) return true;
+        if (!child.parentId) return false;
+
+        return this.checkUserHierarchy(parentId, child.parentId);
+    }
+
+    // Helper: Get managed users
+    async getManagedUsers(userId, roleFilter = null) {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            include: { role: true }
+        });
+
+        if (!user) return [];
+
+        // Get all users where this user is in the parent hierarchy
+        const allUsers = await prisma.user.findMany({
+            where: {
+                role: roleFilter ? { slug: roleFilter } : undefined
+            },
+            include: {
+                role: true
+            }
+        });
+
+        // Filter users who are under this user's management
+        const managedUsers = [];
+        for (const targetUser of allUsers) {
+            const isManaged = await this.checkUserHierarchy(userId, targetUser.id);
+            if (isManaged) {
+                managedUsers.push(targetUser);
+            }
+        }
+
+        return managedUsers;
     }
 
     // Get all houses with pagination and filters
@@ -366,141 +662,6 @@ class HouseController {
         }
     }
 
-    // Update house
-    async updateHouse(req, res) {
-        try {
-            const { id } = req.params;
-            const { address, flatCount, metadata } = req.body;
-
-            // Check if house exists
-            const house = await prisma.house.findUnique({
-                where: { id: BigInt(id) }
-            });
-
-            if (!house) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'House not found'
-                });
-            }
-
-            // Check update permissions
-            const canUpdate = await this.checkHouseUpdatePermission(req.user, house);
-            if (!canUpdate) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'You do not have permission to update this house'
-                });
-            }
-
-            // Prepare update data
-            const updateData = {};
-            if (address !== undefined) updateData.address = address;
-            if (flatCount !== undefined) updateData.flatCount = BigInt(flatCount);
-            
-            if (metadata !== undefined) {
-                updateData.metadata = {
-                    ...house.metadata,
-                    ...metadata,
-                    updatedByUserId: req.user.id,
-                    updatedByRole: req.user.role.slug,
-                    updatedAt: new Date().toISOString()
-                };
-            }
-
-            const updatedHouse = await prisma.house.update({
-                where: { id: BigInt(id) },
-                data: updateData,
-                include: {
-                    owner: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true
-                        }
-                    }
-                }
-            });
-
-            res.json({
-                success: true,
-                message: 'House updated successfully',
-                data: updatedHouse
-            });
-        } catch (error) {
-            console.error('Update house error:', error);
-            res.status(500).json({ 
-                success: false,
-                error: 'Failed to update house' 
-            });
-        }
-    }
-
-    // Delete house (soft delete)
-    async deleteHouse(req, res) {
-        try {
-            const { id } = req.params;
-
-            // Check if house exists
-            const house = await prisma.house.findUnique({
-                where: { id: BigInt(id) }
-            });
-
-            if (!house) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'House not found'
-                });
-            }
-
-            // Check delete permissions
-            const canDelete = await this.checkHouseDeletePermission(req.user, house);
-            if (!canDelete) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'You do not have permission to delete this house'
-                });
-            }
-
-            // Check if house has flats
-            const flatCount = await prisma.flat.count({
-                where: { houseId: BigInt(id) }
-            });
-
-            if (flatCount > 0) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Cannot delete house that has flats. Delete flats first.'
-                });
-            }
-
-            // Soft delete by updating metadata
-            const deletedHouse = await prisma.house.update({
-                where: { id: BigInt(id) },
-                data: {
-                    metadata: {
-                        ...house.metadata,
-                        deletedAt: new Date().toISOString(),
-                        deletedByUserId: req.user.id,
-                        deletedByRole: req.user.role.slug
-                    }
-                }
-            });
-
-            res.json({
-                success: true,
-                message: 'House deleted successfully',
-                data: deletedHouse
-            });
-        } catch (error) {
-            console.error('Delete house error:', error);
-            res.status(500).json({ 
-                success: false,
-                error: 'Failed to delete house' 
-            });
-        }
-    }
-
     // Get house statistics
     async getHouseStats(req, res) {
         try {
@@ -581,145 +742,6 @@ class HouseController {
                 error: 'Failed to fetch house statistics' 
             });
         }
-    }
-
-    // Helper: Check if user can access house
-    async checkHouseAccess(user, houseId) {
-        if (['web_owner', 'developer'].includes(user.role.slug)) {
-            return true;
-        }
-
-        const house = await prisma.house.findUnique({
-            where: { id: BigInt(houseId) },
-            select: { ownerId: true }
-        });
-
-        if (!house) return false;
-
-        if (user.role.slug === 'house_owner') {
-            return house.ownerId === user.id;
-        }
-
-        if (user.role.slug === 'staff') {
-            const hasPermission = await permissionService.hasPermission(
-                user.id, 
-                'houses.view'
-            );
-            
-            if (!hasPermission) return false;
-            
-            // Check if house owner is under staff's management
-            return this.checkUserHierarchy(user.id, house.ownerId);
-        }
-
-        return false;
-    }
-
-    // Helper: Check if user can update house
-    async checkHouseUpdatePermission(user, house) {
-        if (['web_owner', 'developer'].includes(user.role.slug)) {
-            return true;
-        }
-
-        if (user.role.slug === 'house_owner') {
-            if (house.ownerId !== user.id) return false;
-            
-            const hasPermission = await permissionService.hasPermission(
-                user.id, 
-                'houses.edit.own'
-            );
-            return hasPermission;
-        }
-
-        if (user.role.slug === 'staff') {
-            const hasPermission = await permissionService.hasPermission(
-                user.id, 
-                'houses.edit'
-            );
-            
-            if (!hasPermission) return false;
-            
-            // Check if house owner is under staff's management
-            return this.checkUserHierarchy(user.id, house.ownerId);
-        }
-
-        return false;
-    }
-
-    // Helper: Check if user can delete house
-    async checkHouseDeletePermission(user, house) {
-        if (['web_owner', 'developer'].includes(user.role.slug)) {
-            return true;
-        }
-
-        if (user.role.slug === 'house_owner') {
-            if (house.ownerId !== user.id) return false;
-            
-            const hasPermission = await permissionService.hasPermission(
-                user.id, 
-                'houses.delete'
-            );
-            return hasPermission;
-        }
-
-        if (user.role.slug === 'staff') {
-            const hasPermission = await permissionService.hasPermission(
-                user.id, 
-                'houses.delete'
-            );
-            
-            if (!hasPermission) return false;
-            
-            // Check if house owner is under staff's management
-            return this.checkUserHierarchy(user.id, house.ownerId);
-        }
-
-        return false;
-    }
-
-    // Helper: Check user hierarchy (staff managing house owner)
-    async checkUserHierarchy(parentId, childId) {
-        const child = await prisma.user.findUnique({
-            where: { id: childId },
-            include: { parent: true }
-        });
-
-        if (!child) return false;
-        if (child.parentId === parentId) return true;
-        if (!child.parentId) return false;
-
-        return this.checkUserHierarchy(parentId, child.parentId);
-    }
-
-    // Helper: Get managed users
-    async getManagedUsers(userId, roleFilter = null) {
-        const user = await prisma.user.findUnique({
-            where: { id: userId },
-            include: { role: true }
-        });
-
-        if (!user) return [];
-
-        // Get all users where this user is in the parent hierarchy
-        const allUsers = await prisma.user.findMany({
-            where: {
-                role: roleFilter ? { slug: roleFilter } : undefined
-            },
-            include: {
-                role: true
-            }
-        });
-
-        // Filter users who are under this user's management
-        const managedUsers = [];
-        for (const targetUser of allUsers) {
-            const isManaged = await this.checkUserHierarchy(userId, targetUser.id);
-            if (isManaged) {
-                managedUsers.push(targetUser);
-            }
-        }
-
-        return managedUsers;
     }
 }
 
