@@ -332,7 +332,7 @@ class StaffPermissionController {
 
     async bulkGrantPermissions(req, res) {
         try {
-            const { staffIds } = req.params;
+            const { staffId } = req.params;
             const { permissionIds } = req.body;
             if (!Array.isArray(permissionIds) || permissionIds.length === 0) {
                 return res.status(400).json({
@@ -347,7 +347,7 @@ class StaffPermissionController {
             for (const permissionId of permissionIds) {
                 try {
                     const result = await permissionService.grantPermissionToStaff(
-                        BigInt(staffIds),
+                        BigInt(staffId),
                         BigInt(permissionId),
                         req.user.id
                     );

@@ -24,7 +24,7 @@ app.use(bigIntSerializer);
 app.use(
   cors({
     origin: ["http://localhost:3005", '**.ngrok-free.app'],
-    methods: "GET,POST,PUT,DELETE",
+    methods: "GET,POST,PUT,DELETE,PATCH",
     credentials: true, 
   })
 );
@@ -44,6 +44,7 @@ const googleRoute = require("./src/routes/google.routes");
 const apiCacheRoutes = require('./src/routes/cache.routes');
 const staffPermissionRoutes = require('./src/routes/admin/staffPermissions.routes');
 const houseRoutes = require('./src/routes/house.routes');
+const systemPermissionRoutes = require('./src/routes/admin/systemPermissions.routes');
 
 
 
@@ -55,6 +56,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/cache', apiCacheRoutes);
 app.use('/admin/permissions', staffPermissionRoutes);
 app.use('/houses', houseRoutes);
+app.use('/admin/system-settings', systemPermissionRoutes);
 
 
 

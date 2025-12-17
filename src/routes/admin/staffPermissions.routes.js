@@ -18,8 +18,6 @@ router.put('/staff/:staffId/status', StaffPermissionController.updateStaffStatus
 
 // Permission management routes
 router.get('/', StaffPermissionController.getAvailablePermissions);
-router.post('/staff/:staffId/permissions', StaffPermissionController.grantPermission);
-router.delete('/staff/:staffId/permissions/:permissionId', StaffPermissionController.revokePermission);
 router.post('/staff/:staffId/permissions/bulk', StaffPermissionController.bulkGrantPermissions);
 router.delete('/staff/:staffId/permissions/bulk', StaffPermissionController.bulkRevokePermissions);
 router.post('/copy', StaffPermissionController.copyPermissions);
