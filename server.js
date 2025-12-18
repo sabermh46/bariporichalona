@@ -45,7 +45,7 @@ const apiCacheRoutes = require('./src/routes/cache.routes');
 const staffPermissionRoutes = require('./src/routes/admin/staffPermissions.routes');
 const houseRoutes = require('./src/routes/house.routes');
 const systemPermissionRoutes = require('./src/routes/admin/systemPermissions.routes');
-
+const analyticsRoutes = require('./src/routes/analytics.route');
 
 
 app.use("/auth", googleRoute);
@@ -57,6 +57,7 @@ app.use('/api/admin/cache', apiCacheRoutes);
 app.use('/admin/permissions', staffPermissionRoutes);
 app.use('/houses', houseRoutes);
 app.use('/admin/system-settings', systemPermissionRoutes);
+app.use('/analytics', analyticsRoutes);
 
 
 

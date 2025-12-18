@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,143 +6,216 @@ datasource db {
   provider = "mysql"
 }
 
-model Role {
-  id          BigInt   @id @default(autoincrement())
-  name        String   @unique
-  slug        String   @unique
-  rank        Int // higher = more privilege (e.g., WEB_OWNER=100, HOUSE_OWNER=50, FLAT_RENTER=10)
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model caretakerassignment {
+  id                                         BigInt                          @id @default(autoincrement())
+  uuid                                       String                          @unique(map: "CaretakerAssignment_uuid_key") @db.VarChar(36)
+  houseId                                    BigInt
+  caretakerId                                BigInt
+  createdBy                                  BigInt
+  createdAt                                  DateTime                        @default(now())
+  expiresAt                                  DateTime?
+  user_caretakerassignment_caretakerIdTouser user                            @relation("caretakerassignment_caretakerIdTouser", fields: [caretakerId], references: [id], map: "CaretakerAssignment_caretakerId_fkey")
+  user_caretakerassignment_createdByTouser   user                            @relation("caretakerassignment_createdByTouser", fields: [createdBy], references: [id], map: "CaretakerAssignment_createdBy_fkey")
+  house                                      house                           @relation(fields: [houseId], references: [id], map: "CaretakerAssignment_houseId_fkey")
+  caretakerassignmentpermission              caretakerassignmentpermission[]
 
-  RolePermission   RolePermission[]
-  users            User[]
-  loginAsOriginals UserLoginAs[]    @relation("OriginalRoleLoginAs")
+  @@index([caretakerId], map: "CaretakerAssignment_caretakerId_idx")
+  @@index([createdBy], map: "CaretakerAssignment_createdBy_fkey")
+  @@index([houseId], map: "CaretakerAssignment_houseId_idx")
 }
 
-model User {
-  id   BigInt @id @default(autoincrement())
-  uuid String @unique @db.VarChar(36)
+model caretakerassignmentpermission {
+  id                    BigInt              @id @default(autoincrement())
+  caretakerAssignmentId BigInt
+  permissionId          BigInt
+  assignedAt            DateTime            @default(now())
+  caretakerassignment   caretakerassignment @relation(fields: [caretakerAssignmentId], references: [id], map: "CaretakerAssignmentPermission_caretakerAssignmentId_fkey")
+  permission            permission          @relation(fields: [permissionId], references: [id], map: "CaretakerAssignmentPermission_permissionId_fkey")
 
-  email String @unique @db.VarChar(255)
-
-  emailVerifiedAt DateTime?
-
-  passwordHash String? @db.VarChar(255)
-  salt         String? @db.VarChar(64)
-
-  googleId String? @unique @db.VarChar(255)
-  locale   String  @default("en") @db.VarChar(8)
-
-  name  String? @db.VarChar(150)
-  phone String? @unique @db.VarChar(50)
-
-  avatarUrl   String? @db.VarChar(1024)
-  profileJson Json?
-
-  roleId   BigInt?
-  parentId BigInt?
-
-  needsPasswordSetup Boolean @default(false)
-
-  status      String    @default("active")
-  lastLoginAt DateTime?
-  lastLoginIp String?   @db.VarChar(45)
-
-  metadata  Json?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  role     Role?  @relation(fields: [roleId], references: [id])
-  parent   User?  @relation("UserParent", fields: [parentId], references: [id])
-  children User[] @relation("UserParent")
-
-  housesOwned                 House[]               @relation("OwnerHouses")
-  caretakerAssignments        CaretakerAssignment[] @relation("CaretakerRelation")
-  createdCaretakerAssignments CaretakerAssignment[] @relation("CreatorRelation")
-
-  refreshTokens        RefreshToken[]
-  devices              Device[]
-  noticesCreated       Notice[]              @relation("UserNotices")
-  rentersCreated       Renter[]              @relation("RenterCreator")
-  notifications        Notification[]
-  pushSubscriptions    PushSubscription[]
-  pushNotificationLogs PushNotificationLog[]
-
-  createdRegistrationTokens RegistrationToken[] @relation("TokenCreator")
-  usedRegistrationToken     RegistrationToken?  @relation("TokenUser")
-
-  loginAsOrigins UserLoginAs[] @relation("LoginAsUser")
-  loginAsTargets UserLoginAs[] @relation("LoginAsTarget")
-
-  staffPermissionsGranted  StaffPermission[] @relation("PermissionGranter")
-  staffPermissionsRevoked  StaffPermission[] @relation("PermissionRevoker")
-  staffPermissionsAssigned StaffPermission[] @relation("PermissionUser")
-
-  @@index([email])
-  @@index([phone])
+  @@unique([caretakerAssignmentId, permissionId], map: "CaretakerAssignmentPermission_caretakerAssignmentId_permissi_key")
+  @@index([permissionId], map: "CaretakerAssignmentPermission_permissionId_fkey")
 }
 
-model RefreshToken {
+model device {
   id        BigInt   @id @default(autoincrement())
-  token     String   @unique
+  uuid      String   @unique(map: "Device_uuid_key") @db.VarChar(36)
+  userId    BigInt?
+  endpoint  String   @db.VarChar(1024)
+  p256dh    String   @db.VarChar(512)
+  auth      String   @db.VarChar(512)
+  createdAt DateTime @default(now())
+  user      user?    @relation(fields: [userId], references: [id], map: "Device_userId_fkey")
+
+  @@index([userId], map: "Device_userId_idx")
+}
+
+model flat {
+  id        BigInt   @id @default(autoincrement())
+  uuid      String   @unique(map: "Flat_uuid_key") @db.VarChar(36)
+  houseId   BigInt
+  renterId  BigInt?  @unique(map: "Flat_renterId_key")
+  number    String?
+  metadata  String?  @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  name      String
+  house     house    @relation(fields: [houseId], references: [id], map: "Flat_houseId_fkey")
+  renter    renter?  @relation(fields: [renterId], references: [id], map: "Flat_renterId_fkey")
+  notice    notice[]
+
+  @@index([houseId], map: "Flat_houseId_idx")
+  @@index([renterId], map: "Flat_renterId_idx")
+}
+
+model house {
+  id                  BigInt                @id @default(autoincrement())
+  uuid                String                @unique(map: "House_uuid_key") @db.VarChar(36)
+  ownerId             BigInt
+  address             String
+  metadata            String?               @db.LongText
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime
+  flatCount           BigInt                @default(0)
+  active              Boolean               @default(false)
+  caretakerassignment caretakerassignment[]
+  flat                flat[]
+  user                user                  @relation(fields: [ownerId], references: [id], map: "House_ownerId_fkey")
+  notice              notice[]
+
+  @@index([ownerId], map: "House_ownerId_idx")
+}
+
+model notice {
+  id        BigInt   @id @default(autoincrement())
+  uuid      String   @unique(map: "Notice_uuid_key") @db.VarChar(36)
+  houseId   BigInt?
+  flatId    BigInt?
+  title     String
+  content   String
+  locale    String   @db.VarChar(8)
+  createdBy BigInt?
+  createdAt DateTime @default(now())
+  user      user?    @relation(fields: [createdBy], references: [id], map: "Notice_createdBy_fkey")
+  flat      flat?    @relation(fields: [flatId], references: [id], map: "Notice_flatId_fkey")
+  house     house?   @relation(fields: [houseId], references: [id], map: "Notice_houseId_fkey")
+
+  @@index([createdBy], map: "Notice_createdBy_fkey")
+  @@index([flatId], map: "Notice_flatId_idx")
+  @@index([houseId], map: "Notice_houseId_idx")
+}
+
+model notification {
+  id                  BigInt                @id @default(autoincrement())
+  uuid                String                @unique(map: "Notification_uuid_key") @db.VarChar(36)
+  userId              BigInt
+  title               String
+  message             String
+  type                String                @default("info")
+  read                Boolean               @default(false)
+  metadata            String?               @db.LongText
+  pushSent            Boolean               @default(false)
+  pushError           String?
+  createdAt           DateTime              @default(now())
+  readAt              DateTime?
+  expiresAt           DateTime?
+  user                user                  @relation(fields: [userId], references: [id], onDelete: Cascade, map: "Notification_userId_fkey")
+  pushnotificationlog pushnotificationlog[]
+
+  @@index([pushSent], map: "Notification_pushSent_idx")
+  @@index([type], map: "Notification_type_idx")
+  @@index([userId, createdAt], map: "Notification_userId_createdAt_idx")
+  @@index([userId, read], map: "Notification_userId_read_idx")
+}
+
+model permission {
+  id                            BigInt                          @id @default(autoincrement())
+  key                           String                          @unique(map: "Permission_key_key")
+  description                   String?
+  createdAt                     DateTime                        @default(now())
+  updatedAt                     DateTime
+  caretakerassignmentpermission caretakerassignmentpermission[]
+  rolepermission                rolepermission[]
+  staffpermission               staffpermission[]
+}
+
+model pushnotificationlog {
+  id               BigInt            @id @default(autoincrement())
+  userId           BigInt
+  title            String
+  body             String
+  data             String?           @db.LongText
+  notificationId   BigInt?
+  subscriptionId   BigInt?
+  sentAt           DateTime          @default(now())
+  delivered        Boolean           @default(false)
+  deliveredAt      DateTime?
+  opened           Boolean           @default(false)
+  openedAt         DateTime?
+  error            String?
+  notification     notification?     @relation(fields: [notificationId], references: [id], map: "PushNotificationLog_notificationId_fkey")
+  pushsubscription pushsubscription? @relation(fields: [subscriptionId], references: [id], map: "PushNotificationLog_subscriptionId_fkey")
+  user             user              @relation(fields: [userId], references: [id], onDelete: Cascade, map: "PushNotificationLog_userId_fkey")
+
+  @@index([delivered], map: "PushNotificationLog_delivered_idx")
+  @@index([notificationId], map: "PushNotificationLog_notificationId_fkey")
+  @@index([subscriptionId], map: "PushNotificationLog_subscriptionId_fkey")
+  @@index([userId, sentAt], map: "PushNotificationLog_userId_sentAt_idx")
+}
+
+model pushsubscription {
+  id                  BigInt                @id @default(autoincrement())
+  userId              BigInt
+  endpoint            String                @unique(map: "PushSubscription_endpoint_key")
+  p256dh              String
+  auth                String
+  userAgent           String?
+  clientType          String?
+  createdAt           DateTime              @default(now())
+  expiresAt           DateTime?
+  lastUsed            DateTime              @default(now())
+  pushnotificationlog pushnotificationlog[]
+  user                user                  @relation(fields: [userId], references: [id], onDelete: Cascade, map: "PushSubscription_userId_fkey")
+
+  @@index([userId, clientType], map: "PushSubscription_userId_clientType_idx")
+  @@index([userId], map: "PushSubscription_userId_idx")
+}
+
+model refreshtoken {
+  id        BigInt   @id @default(autoincrement())
+  token     String   @unique(map: "RefreshToken_token_key")
   userId    BigInt
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
   expiresAt DateTime
+  user      user     @relation(fields: [userId], references: [id], map: "RefreshToken_userId_fkey")
 
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId])
+  @@index([userId], map: "RefreshToken_userId_idx")
 }
 
-model House {
-  id        BigInt   @id @default(autoincrement())
-  uuid      String   @unique @db.VarChar(36)
-  ownerId   BigInt
-  address   String
-  metadata  Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  flatCount BigInt   @default(0)
-  active    Boolean  @default(false)
+model registrationtoken {
+  id                                     BigInt    @id @default(autoincrement())
+  token                                  String    @unique(map: "RegistrationToken_token_key")
+  createdBy                              BigInt
+  email                                  String?
+  roleSlug                               String
+  expiresAt                              DateTime
+  used                                   Boolean   @default(false)
+  usedAt                                 DateTime?
+  usedBy                                 BigInt?   @unique(map: "RegistrationToken_usedBy_key")
+  metadata                               String?   @db.LongText
+  createdAt                              DateTime  @default(now())
+  user_registrationtoken_createdByTouser user      @relation("registrationtoken_createdByTouser", fields: [createdBy], references: [id], map: "RegistrationToken_createdBy_fkey")
+  user_registrationtoken_usedByTouser    user?     @relation("registrationtoken_usedByTouser", fields: [usedBy], references: [id], map: "RegistrationToken_usedBy_fkey")
 
-  owner User @relation("OwnerHouses", fields: [ownerId], references: [id])
-
-  flats      Flat[]
-  caretakers CaretakerAssignment[]
-  notices    Notice[]
-
-  @@index([ownerId])
+  @@index([createdBy], map: "RegistrationToken_createdBy_idx")
+  @@index([expiresAt], map: "RegistrationToken_expiresAt_idx")
+  @@index([token], map: "RegistrationToken_token_idx")
+  @@index([used], map: "RegistrationToken_used_idx")
 }
 
-model Flat {
-  id      BigInt @id @default(autoincrement())
-  uuid    String @unique @db.VarChar(36)
-  houseId BigInt
-
-  name String
-
-  renterId BigInt? @unique
-  renter   Renter? @relation(fields: [renterId], references: [id])
-
-  number    String?
-  metadata  Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  house   House    @relation(fields: [houseId], references: [id])
-  notices Notice[]
-
-  @@index([houseId])
-  @@index([renterId])
-}
-
-model Renter {
-  id               BigInt  @id @default(autoincrement())
-  uuid             String  @unique @db.VarChar(36)
-  flat             Flat?
+model renter {
+  id               BigInt   @id @default(autoincrement())
+  uuid             String   @unique(map: "Renter_uuid_key") @db.VarChar(36)
   name             String
   phone            String?
   alternativePhone String?
@@ -151,269 +223,165 @@ model Renter {
   nid              String?
   nidFrontImageUrl String?
   nidBackImageUrl  String?
-  status           String? @default("active")
-  metadata         Json?
+  status           String?  @default("active")
+  metadata         String?  @db.LongText
+  createdBy        BigInt?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime
+  flat             flat?
+  user             user?    @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
 
-  createdBy BigInt?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  creator User? @relation("RenterCreator", fields: [createdBy], references: [id])
+  @@index([createdBy], map: "Renter_createdBy_fkey")
 }
 
-model Permission {
-  id          BigInt   @id @default(autoincrement())
-  key         String   @unique // e.g. "view_maintenance", "manage_keys"
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  staffPermissions               StaffPermission[]
-  RolePermission                 RolePermission[]
-  CaretakerAssignmentPermissions CaretakerAssignmentPermission[]
+model role {
+  id             BigInt           @id @default(autoincrement())
+  name           String           @unique(map: "Role_name_key")
+  slug           String           @unique(map: "Role_slug_key")
+  rank           Int
+  description    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime
+  rolepermission rolepermission[]
+  user           user[]
+  userloginas    userloginas[]
 }
 
-model RolePermission {
-  id           BigInt   @id @default(autoincrement())
+model rolelimit {
+  id            BigInt   @id @default(autoincrement())
+  roleSlug      String   @unique(map: "RoleLimit_roleSlug_key")
+  maxHouses     Int      @default(1)
+  maxCaretakers Int      @default(2)
+  maxFlats      Int      @default(10)
+  canLoginAs    String?  @db.LongText
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+
+  @@index([roleSlug], map: "RoleLimit_roleSlug_idx")
+}
+
+model rolepermission {
+  id           BigInt     @id @default(autoincrement())
   roleId       BigInt
   permissionId BigInt
-  createdAt    DateTime @default(now())
+  createdAt    DateTime   @default(now())
+  permission   permission @relation(fields: [permissionId], references: [id], map: "RolePermission_permissionId_fkey")
+  role         role       @relation(fields: [roleId], references: [id], map: "RolePermission_roleId_fkey")
 
-  role       Role       @relation(fields: [roleId], references: [id])
-  permission Permission @relation(fields: [permissionId], references: [id])
-
-  @@unique([roleId, permissionId])
+  @@unique([roleId, permissionId], map: "RolePermission_roleId_permissionId_key")
+  @@index([permissionId], map: "RolePermission_permissionId_fkey")
 }
 
-model CaretakerAssignment {
-  id          BigInt    @id @default(autoincrement())
-  uuid        String    @unique @db.VarChar(36)
-  houseId     BigInt
-  caretakerId BigInt
-  createdBy   BigInt
-  createdAt   DateTime  @default(now())
-  expiresAt   DateTime?
+model staffpermission {
+  id                                   BigInt     @id @default(autoincrement())
+  userId                               BigInt
+  permissionId                         BigInt
+  grantedBy                            BigInt
+  grantedAt                            DateTime   @default(now())
+  revokedAt                            DateTime?
+  revokedBy                            BigInt?
+  user_staffpermission_grantedByTouser user       @relation("staffpermission_grantedByTouser", fields: [grantedBy], references: [id], map: "StaffPermission_grantedBy_fkey")
+  permission                           permission @relation(fields: [permissionId], references: [id], map: "StaffPermission_permissionId_fkey")
+  user_staffpermission_revokedByTouser user?      @relation("staffpermission_revokedByTouser", fields: [revokedBy], references: [id], map: "StaffPermission_revokedBy_fkey")
+  user_staffpermission_userIdTouser    user       @relation("staffpermission_userIdTouser", fields: [userId], references: [id], map: "StaffPermission_userId_fkey")
 
-  house House @relation(fields: [houseId], references: [id])
-
-  caretaker User @relation("CaretakerRelation", fields: [caretakerId], references: [id])
-
-  creator User @relation("CreatorRelation", fields: [createdBy], references: [id])
-
-  permissions CaretakerAssignmentPermission[]
-
-  @@index([houseId])
-  @@index([caretakerId])
+  @@unique([userId, permissionId], map: "StaffPermission_userId_permissionId_key")
+  @@index([grantedAt], map: "StaffPermission_grantedAt_idx")
+  @@index([grantedBy], map: "StaffPermission_grantedBy_fkey")
+  @@index([permissionId], map: "StaffPermission_permissionId_idx")
+  @@index([revokedBy], map: "StaffPermission_revokedBy_fkey")
+  @@index([userId], map: "StaffPermission_userId_idx")
 }
 
-model CaretakerAssignmentPermission {
-  id                    BigInt   @id @default(autoincrement())
-  caretakerAssignmentId BigInt
-  permissionId          BigInt
-  assignedAt            DateTime @default(now())
-
-  caretakerAssignment CaretakerAssignment @relation(fields: [caretakerAssignmentId], references: [id])
-  permission          Permission          @relation(fields: [permissionId], references: [id])
-
-  @@unique([caretakerAssignmentId, permissionId])
-}
-
-model Template {
+model systemsetting {
   id        BigInt   @id @default(autoincrement())
-  key       String   @unique
-  type      String // "email", "notice"
+  key       String   @unique(map: "SystemSetting_key_key")
+  value     String   @db.LongText
+  type      String   @default("string")
+  category  String   @default("general")
+  isPublic  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([category], map: "SystemSetting_category_idx")
+  @@index([key], map: "SystemSetting_key_idx")
+}
+
+model template {
+  id        BigInt   @id @default(autoincrement())
+  key       String   @unique(map: "Template_key_key")
+  type      String
   locale    String   @db.VarChar(8)
   subject   String?
   content   String
   createdAt DateTime @default(now())
 }
 
-model Device {
-  id        BigInt   @id @default(autoincrement())
-  uuid      String   @unique @db.VarChar(36)
-  userId    BigInt?
-  endpoint  String   @db.VarChar(1024)
-  p256dh    String   @db.VarChar(512)
-  auth      String   @db.VarChar(512)
-  createdAt DateTime @default(now())
+model user {
+  id                                                        BigInt                @id @default(autoincrement())
+  uuid                                                      String                @unique(map: "User_uuid_key") @db.VarChar(36)
+  email                                                     String                @unique(map: "User_email_key") @db.VarChar(255)
+  emailVerifiedAt                                           DateTime?
+  passwordHash                                              String?               @db.VarChar(255)
+  salt                                                      String?               @db.VarChar(64)
+  googleId                                                  String?               @unique(map: "User_googleId_key") @db.VarChar(255)
+  locale                                                    String                @default("en") @db.VarChar(8)
+  name                                                      String?               @db.VarChar(150)
+  phone                                                     String?               @unique(map: "User_phone_key") @db.VarChar(50)
+  avatarUrl                                                 String?               @db.VarChar(1024)
+  profileJson                                               String?               @db.LongText
+  roleId                                                    BigInt?
+  parentId                                                  BigInt?
+  needsPasswordSetup                                        Boolean               @default(false)
+  status                                                    String                @default("active")
+  lastLoginAt                                               DateTime?
+  lastLoginIp                                               String?               @db.VarChar(45)
+  metadata                                                  String?               @db.LongText
+  createdAt                                                 DateTime              @default(now())
+  updatedAt                                                 DateTime
+  deletedAt                                                 DateTime?
+  caretakerassignment_caretakerassignment_caretakerIdTouser caretakerassignment[] @relation("caretakerassignment_caretakerIdTouser")
+  caretakerassignment_caretakerassignment_createdByTouser   caretakerassignment[] @relation("caretakerassignment_createdByTouser")
+  device                                                    device[]
+  house                                                     house[]
+  notice                                                    notice[]
+  notification                                              notification[]
+  pushnotificationlog                                       pushnotificationlog[]
+  pushsubscription                                          pushsubscription[]
+  refreshtoken                                              refreshtoken[]
+  registrationtoken_registrationtoken_createdByTouser       registrationtoken[]   @relation("registrationtoken_createdByTouser")
+  registrationtoken_registrationtoken_usedByTouser          registrationtoken?    @relation("registrationtoken_usedByTouser")
+  renter                                                    renter[]
+  staffpermission_staffpermission_grantedByTouser           staffpermission[]     @relation("staffpermission_grantedByTouser")
+  staffpermission_staffpermission_revokedByTouser           staffpermission[]     @relation("staffpermission_revokedByTouser")
+  staffpermission_staffpermission_userIdTouser              staffpermission[]     @relation("staffpermission_userIdTouser")
+  user                                                      user?                 @relation("userTouser", fields: [parentId], references: [id], map: "User_parentId_fkey")
+  other_user                                                user[]                @relation("userTouser")
+  role                                                      role?                 @relation(fields: [roleId], references: [id], map: "User_roleId_fkey")
+  userloginas_userloginas_targetUserIdTouser                userloginas[]         @relation("userloginas_targetUserIdTouser")
+  userloginas_userloginas_userIdTouser                      userloginas[]         @relation("userloginas_userIdTouser")
 
-  user User? @relation(fields: [userId], references: [id])
-
-  @@index([userId])
+  @@index([email], map: "User_email_idx")
+  @@index([parentId], map: "User_parentId_fkey")
+  @@index([phone], map: "User_phone_idx")
+  @@index([roleId], map: "User_roleId_fkey")
 }
 
-model Notice {
-  id   BigInt @id @default(autoincrement())
-  uuid String @unique @db.VarChar(36)
+model userloginas {
+  id                                  BigInt   @id @default(autoincrement())
+  userId                              BigInt
+  targetUserId                        BigInt
+  originalRoleId                      BigInt
+  reason                              String?
+  createdAt                           DateTime @default(now())
+  expiresAt                           DateTime
+  role                                role     @relation(fields: [originalRoleId], references: [id], map: "UserLoginAs_originalRoleId_fkey")
+  user_userloginas_targetUserIdTouser user     @relation("userloginas_targetUserIdTouser", fields: [targetUserId], references: [id], map: "UserLoginAs_targetUserId_fkey")
+  user_userloginas_userIdTouser       user     @relation("userloginas_userIdTouser", fields: [userId], references: [id], map: "UserLoginAs_userId_fkey")
 
-  houseId BigInt?
-  flatId  BigInt?
-
-  title   String
-  content String
-  locale  String @db.VarChar(8)
-
-  createdBy BigInt?
-  createdAt DateTime @default(now())
-
-  house   House? @relation(fields: [houseId], references: [id])
-  flat    Flat?  @relation(fields: [flatId], references: [id])
-  creator User?  @relation("UserNotices", fields: [createdBy], references: [id])
-
-  @@index([houseId])
-  @@index([flatId])
-}
-
-model Notification {
-  id        BigInt    @id @default(autoincrement())
-  uuid      String    @unique @db.VarChar(36)
-  userId    BigInt
-  title     String
-  message   String
-  type      String    @default("info") // info, warning, alert, success
-  read      Boolean   @default(false)
-  metadata  Json? // { action: 'view_house', id: 1, priority: 'high' }
-  pushSent  Boolean   @default(false)
-  pushError String?
-  createdAt DateTime  @default(now())
-  readAt    DateTime?
-  expiresAt DateTime? // When notification expires
-
-  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pushNotificationLogs PushNotificationLog[]
-
-  @@index([userId, read])
-  @@index([userId, createdAt])
-  @@index([type])
-  @@index([pushSent])
-}
-
-model PushSubscription {
-  id         BigInt    @id @default(autoincrement())
-  userId     BigInt
-  endpoint   String    @unique
-  p256dh     String
-  auth       String
-  userAgent  String?
-  clientType String? // 'desktop' or 'mobile'
-  createdAt  DateTime  @default(now())
-  expiresAt  DateTime? // When subscription expires
-  lastUsed   DateTime  @default(now())
-
-  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pushNotificationLogs PushNotificationLog[]
-
-  @@index([userId])
-  @@index([userId, clientType])
-}
-
-model PushNotificationLog {
-  id             BigInt    @id @default(autoincrement())
-  userId         BigInt
-  title          String
-  body           String
-  data           Json? // Additional data: { url: '/dashboard', type: 'rent_due', houseId: 1, flatId: 1 }
-  notificationId BigInt? // Reference to Notification model if exists
-  subscriptionId BigInt? // Reference to which subscription was used
-  sentAt         DateTime  @default(now())
-  delivered      Boolean   @default(false)
-  deliveredAt    DateTime?
-  opened         Boolean   @default(false)
-  openedAt       DateTime?
-  error          String?
-
-  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subscription PushSubscription? @relation(fields: [subscriptionId], references: [id])
-  notification Notification?     @relation(fields: [notificationId], references: [id])
-
-  @@index([userId, sentAt])
-  @@index([delivered])
-}
-
-model SystemSetting {
-  id        BigInt   @id @default(autoincrement())
-  key       String   @unique
-  value     Json // Can store boolean, number, string, or array
-  type      String   @default("string") // "boolean", "number", "string", "array", "object"
-  category  String   @default("general")
-  isPublic  Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([key])
-  @@index([category])
-}
-
-model RegistrationToken {
-  id        BigInt    @id @default(autoincrement())
-  token     String    @unique
-  createdBy BigInt // User who created this token
-  email     String? // Specific email if token is for specific user
-  roleSlug  String // Role to assign when registering with this token
-  expiresAt DateTime
-  used      Boolean   @default(false)
-  usedAt    DateTime?
-  usedBy    BigInt?   @unique // Add @unique here for one-to-one relation
-  metadata  Json? // Additional data: { houseLimit: 5, permissions: [...] }
-  createdAt DateTime  @default(now())
-
-  creator User  @relation("TokenCreator", fields: [createdBy], references: [id])
-  user    User? @relation("TokenUser", fields: [usedBy], references: [id])
-
-  @@index([token])
-  @@index([createdBy])
-  @@index([used])
-  @@index([expiresAt])
-}
-
-model RoleLimit {
-  id            BigInt   @id @default(autoincrement())
-  roleSlug      String   @unique
-  maxHouses     Int      @default(1) // Maximum houses this role can create
-  maxCaretakers Int      @default(2) // Maximum caretakers per house
-  maxFlats      Int      @default(10) // Maximum flats per house
-  canLoginAs    Json? // Roles they can login as: ["house_owner", "caretaker"]
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@index([roleSlug])
-}
-
-model UserLoginAs {
-  id             BigInt   @id @default(autoincrement())
-  userId         BigInt // User who is logging in as someone else
-  targetUserId   BigInt // User they are logging in as
-  originalRoleId BigInt // Their original role
-  reason         String?
-  createdAt      DateTime @default(now())
-  expiresAt      DateTime
-
-  user         User @relation("LoginAsUser", fields: [userId], references: [id])
-  targetUser   User @relation("LoginAsTarget", fields: [targetUserId], references: [id])
-  originalRole Role @relation("OriginalRoleLoginAs", fields: [originalRoleId], references: [id])
-
-  @@unique([userId, targetUserId])
-  @@index([userId])
-  @@index([targetUserId])
-  @@index([expiresAt])
-}
-
-model StaffPermission {
-  id           BigInt    @id @default(autoincrement())
-  userId       BigInt
-  permissionId BigInt
-  grantedBy    BigInt
-  grantedAt    DateTime  @default(now())
-  revokedAt    DateTime?
-  revokedBy    BigInt?
-
-  user       User       @relation("PermissionUser", fields: [userId], references: [id])
-  permission Permission @relation(fields: [permissionId], references: [id])
-  granter    User       @relation("PermissionGranter", fields: [grantedBy], references: [id])
-  revoker    User?      @relation("PermissionRevoker", fields: [revokedBy], references: [id])
-
-  @@unique([userId, permissionId])
-  @@index([userId])
-  @@index([permissionId])
-  @@index([grantedAt])
+  @@unique([userId, targetUserId], map: "UserLoginAs_userId_targetUserId_key")
+  @@index([expiresAt], map: "UserLoginAs_expiresAt_idx")
+  @@index([originalRoleId], map: "UserLoginAs_originalRoleId_fkey")
+  @@index([targetUserId], map: "UserLoginAs_targetUserId_idx")
+  @@index([userId], map: "UserLoginAs_userId_idx")
 }

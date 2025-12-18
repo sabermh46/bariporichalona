@@ -1,126 +1,3 @@
-// const prisma = require("../src/config/prisma");
-// const { v4: uuid } = require("uuid");
-
-// async function main() {
-//   console.log("🌱 Seeding database...");
-
-//   // 1) Create roles
-//   const roles = [
-//     { name: "DEVELOPER", slug: "developer", rank: 999, description: "System-level access" },
-//     { name: "WEB_OWNER", slug: "web_owner", rank: 100 },
-//     { name: "STAFF", slug: "staff", rank: 80 },
-//     { name: "HOUSE_OWNER", slug: "house_owner", rank: 60 },
-//     { name: "CARETAKER", slug: "caretaker", rank: 40 },
-//   ];
-
-//   for (const role of roles) {
-//     await prisma.role.upsert({
-//       where: { slug: role.slug },
-//       update: {},
-//       create: {
-//         name: role.name,
-//         slug: role.slug,
-//         rank: role.rank,
-//         description: role.description || null,
-//       },
-//     });
-//   }
-
-//   console.log("✔ Roles seeded");
-
-//   // 2) Fetch web_owner role
-//   const webOwner = await prisma.role.findUnique({
-//     where: { slug: "web_owner" }, // Use slug instead of name
-//   });
-
-//   if (!webOwner) throw new Error("WEB_OWNER role missing");
-
-//   // Generate a fixed UUID for the admin user so we can find it consistently
-//   const adminUuid = "00000000-0000-0000-0000-000000000001";
-  
-//   // 3) Check if admin user exists using uuid
-//   const existingAdmin = await prisma.user.findUnique({
-//     where: { uuid: adminUuid },
-//   });
-
-//   // 4) Create or update admin user
-//   if (existingAdmin) {
-//     await prisma.user.update({
-//       where: { uuid: adminUuid },
-//       data: {
-//         email: "admin@system.local",
-//         name: "Web Owner",
-//         roleId: webOwner.id,
-//       },
-//     });
-//   } else {
-//     await prisma.user.create({
-//       data: {
-//         uuid: adminUuid,
-//         email: "admin@system.local",
-//         name: "Web Owner",
-//         roleId: webOwner.id,
-//       },
-//     });
-//   }
-
-//   console.log("✔ Admin user ready");
-
-//   // 5) Permissions
-//   const permissions = [
-//     "manage_users",
-//     "manage_houses",
-//     "manage_flats",
-//     "manage_notices",
-//     "manage_templates",
-//     "send_notifications",
-//   ];
-
-//   for (const key of permissions) {
-//     await prisma.permission.upsert({
-//       where: { key },
-//       update: {},
-//       create: {
-//         key,
-//         description: "",
-//       },
-//     });
-//   }
-
-//   console.log("✔ Permissions seeded");
-
-//   // 6) Assign all permissions to WEB_OWNER
-//   const allPerms = await prisma.permission.findMany();
-//   for (const perm of allPerms) {
-//     await prisma.rolePermission.upsert({
-//       where: {
-//         roleId_permissionId: {
-//           roleId: webOwner.id,
-//           permissionId: perm.id,
-//         },
-//       },
-//       update: {},
-//       create: {
-//         roleId: webOwner.id,
-//         permissionId: perm.id,
-//       },
-//     });
-//   }
-
-//   console.log("✔ RolePermission assigned");
-//   console.log("🎉 Seeding completed");
-// }
-
-// main()
-//   .catch((err) => {
-//     console.error("❌ Seed failed:", err);
-//     process.exit(1);
-//   })
-//   .finally(async () => {
-//     await prisma.$disconnect();
-//   });
-
-
 const prisma = require("../src/config/prisma");
 const { v4: uuid } = require("uuid");
 const { hashPassword } = require("../src/utils/password");
@@ -154,6 +31,7 @@ async function main() {
 
   // 2) Fetch roles for later use
   const webOwnerRole = await prisma.role.findUnique({ where: { slug: "web_owner" } });
+  const developerRole = await prisma.role.findUnique({ where: { slug: "developer" } });
   const staffRole = await prisma.role.findUnique({ where: { slug: "staff" } });
   const houseOwnerRole = await prisma.role.findUnique({ where: { slug: "house_owner" } });
   const caretakerRole = await prisma.role.findUnique({ where: { slug: "caretaker" } });
@@ -410,43 +288,58 @@ async function main() {
   // Staff gets NO permissions by default (will be assigned per-user via StaffPermission)
   console.log("⚠ Staff permissions will be assigned per-user");
 
-  // 7) Create admin user with fixed UUID
-  const adminUuid = "00000000-0000-0000-0000-000000000001";
-  
-  const existingAdmin = await prisma.user.findUnique({
-    where: { uuid: adminUuid },
-  });
 
-  const { salt, hash } = await hashPassword("test@123");
-  if (existingAdmin) {
-    await prisma.user.update({
-      where: { uuid: adminUuid },
-      data: {
-        email: "sabermahmud.sourav.7@gmail.com",
-        name: "Web Owner",
-        roleId: webOwnerRole.id,
-        passwordHash: hash,
-        salt: salt,
-        needsPasswordSetup: true,
-      },
-    });
-  } else {
-    await prisma.user.create({
-      data: {
-        uuid: adminUuid,
-        email: "sabermahmud.sourav.7@gmail.com",
-        name: "Web Owner",
-        roleId: webOwnerRole.id,
-        passwordHash: hash,
-        salt: salt,
-        needsPasswordSetup: true,
-        metadata: {
-          isSystemAdmin: true,
-          createdBy: "system",
-        },
-      },
-    });
-  }
+// 7) Create System Users (Developer & Web Owner)
+  const developerUuid = "00000000-0000-0000-0000-000000000000"; // Fixed UUID for Dev
+  const adminUuid = "00000000-0000-0000-0000-000000000001";     // Fixed UUID for Admin
+
+  const { salt, hash } = await hashPassword("Test@123");
+
+  // --- Create/Update Developer ---
+  await prisma.user.upsert({
+    where: { uuid: developerUuid },
+    update: {
+      email: "sabermahmud.sourav@gmail.com",
+      name: "Saber Mahmud Sourav",
+      roleId: developerRole.id,
+      passwordHash: hash,
+      salt: salt,
+    },
+    create: {
+      uuid: developerUuid,
+      email: "sabermahmud.sourav@gmail.com",
+      name: "Saber Mahmud Sourav",
+      roleId: developerRole.id,
+      passwordHash: hash,
+      salt: salt,
+      needsPasswordSetup: true,
+      metadata: { isDeveloper: true, createdBy: "system" },
+    },
+  });
+  console.log("✔ Developer user ready");
+
+  // --- Create/Update Web Owner ---
+  await prisma.user.upsert({
+    where: { uuid: adminUuid },
+    update: {
+      email: "tanvirhaque.org@gmail.com",
+      name: "Tanvir Haque",
+      roleId: webOwnerRole.id,
+      passwordHash: hash,
+      salt: salt,
+    },
+    create: {
+      uuid: adminUuid,
+      email: "tanvirhaque.org@gmail.com",
+      name: "Tanvir Haque",
+      roleId: webOwnerRole.id,
+      passwordHash: hash,
+      salt: salt,
+      needsPasswordSetup: true,
+      metadata: { isSystemAdmin: true, createdBy: "system" },
+    },
+  });
+  console.log("✔ Web Owner user ready");
 
   console.log("✔ Admin user created (use 'admin@system.local')");
 
