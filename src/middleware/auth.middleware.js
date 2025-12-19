@@ -1,6 +1,6 @@
-// middlewares/auth.middleware.js
+// src/middleware/auth.middleware.js
 const jwt = require("jsonwebtoken");
-const prisma = require("../config/prisma");
+const db = require("../config/knex");
 const permissionService = require("../services/permission.service");
 
 // Cache for basic user data (without permissions)
@@ -83,41 +83,19 @@ const authMiddleware = async (req, res, next) => {
         if (cachedUser && (Date.now() - cachedUser.timestamp < USER_CACHE_TTL)) {
             user = cachedUser.data;
         } else {
-            // Find user with basic info (without permissions for now)
-            user = await prisma.user.findUnique({ 
-                where: { id: userId },
-                select: { 
-                    id: true,
-                    uuid: true,
-                    email: true,
-                    emailVerifiedAt: true,
-                    googleId: true,
-                    locale: true,
-                    name: true,
-                    phone: true,
-                    avatarUrl: true,
-                    profileJson: true,
-                    roleId: true,
-                    parentId: true,
-                    needsPasswordSetup: true,
-                    status: true,
-                    lastLoginAt: true,
-                    lastLoginIp: true,
-                    metadata: true,
-                    createdAt: true,
-                    updatedAt: true,
-                    deletedAt: true,
-                    role: {
-                        select: {
-                            id: true,
-                            name: true,
-                            slug: true,
-                            rank: true,
-                            description: true
-                        }
-                    }
-                }
-            });
+            // Find user with basic info
+            user = await db('user')
+                .where('user.id', userId)
+                .leftJoin('role', 'user.roleId', 'role.id')
+                .select(
+                    'user.*',
+                    'role.id as role_id',
+                    'role.name as role_name',
+                    'role.slug as role_slug',
+                    'role.rank as role_rank',
+                    'role.description as role_description'
+                )
+                .first();
 
             if (!user) {
                 return res.status(401).json({ 
@@ -126,6 +104,43 @@ const authMiddleware = async (req, res, next) => {
                     code: "USER_NOT_FOUND"
                 });
             }
+
+            // Parse JSON fields
+            if (user.metadata) {
+                try {
+                    user.metadata = JSON.parse(user.metadata);
+                } catch (e) {
+                    user.metadata = {};
+                }
+            }
+            if (user.profileJson) {
+                try {
+                    user.profileJson = JSON.parse(user.profileJson);
+                } catch (e) {
+                    user.profileJson = {};
+                }
+            }
+
+            // Format user object
+            user = {
+                ...user,
+                id: user.id,
+                roleId: user.roleId,
+                role: {
+                    id: user.role_id,
+                    name: user.role_name,
+                    slug: user.role_slug,
+                    rank: user.role_rank,
+                    description: user.role_description
+                }
+            };
+
+            // Remove temporary fields
+            delete user.role_id;
+            delete user.role_name;
+            delete user.role_slug;
+            delete user.role_rank;
+            delete user.role_description;
 
             // Cache the user
             userCache.set(userId.toString(), {
@@ -152,9 +167,9 @@ const authMiddleware = async (req, res, next) => {
             permissions: permissions
         };
         
-        // Set prisma instance if needed
-        if (!req.prisma) {
-            req.prisma = prisma;
+        // Set knex instance if needed
+        if (!req.db) {
+            req.db = db;
         }
 
         next();

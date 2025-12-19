@@ -1,19 +1,18 @@
-// utils/serializer.js
 // src/utils/serializer.js
-
 /**
  * Serialize data with BigInt support for JSON.stringify
  */
 function serializeBigInt(data) {
+  if (data === null || data === undefined) {
+    return data;
+  }
+  
   return JSON.parse(JSON.stringify(data, (key, value) => {
     if (typeof value === 'bigint') {
       return value.toString();
     }
     if (value instanceof Date) {
       return value.toISOString();
-    }
-    if (value === null) {
-      return value;
     }
     return value;
   }));
@@ -34,7 +33,7 @@ function bigIntSerializer(req, res, next) {
 }
 
 /**
- * Convert BigInt in Prisma results
+ * Convert BigInt in database results
  */
 function convertBigIntToString(obj) {
   if (obj === null || obj === undefined) {

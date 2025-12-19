@@ -1,22 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const authMiddleware = require('../middleware/auth.middleware');
-const prisma = require('../config/prisma');
-
-// Helper to convert BigInt to String
-const convertBigIntToString = (obj) => {
-    if (obj === null || obj === undefined) return obj;
-    if (typeof obj === 'bigint') return obj.toString();
-    if (Array.isArray(obj)) return obj.map(convertBigIntToString);
-    if (typeof obj === 'object' && obj.constructor === Object) {
-        const newObj = {};
-        for (const key in obj) {
-            newObj[key] = convertBigIntToString(obj[key]);
-        }
-        return newObj;
-    }
-    return obj;
-};
+const db = require('../config/knex');
+const { serializeBigInt } = require('../utils/serializer');
 
 // Get user notifications with pagination
 router.get('/', authMiddleware, async (req, res) => {
@@ -32,69 +18,79 @@ router.get('/', authMiddleware, async (req, res) => {
 
         const pageNum = parseInt(page);
         const limitNum = parseInt(limit);
-        const skip = (pageNum - 1) * limitNum;
+        const offset = (pageNum - 1) * limitNum;
 
-        // Build where clause
-        const where = {
-            userId: req.user.id
-        };
+        // Build query
+        let query = db('notification')
+            .where('userId', req.user.id);
 
         if (unread === 'true') {
-            where.read = false;
+            query = query.where('read', false);
         }
 
         if (type) {
-            where.type = type;
+            query = query.where('type', type);
         }
 
-        if (startDate || endDate) {
-            where.createdAt = {};
-            if (startDate) {
-                where.createdAt.gte = new Date(startDate);
-            }
-            if (endDate) {
-                where.createdAt.lte = new Date(endDate);
-            }
+        if (startDate) {
+            query = query.where('createdAt', '>=', new Date(startDate));
         }
 
-        // Get notifications
-        const notifications = await prisma.notification.findMany({
-            where,
-            orderBy: { createdAt: 'desc' },
-            skip,
-            take: limitNum,
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        avatarUrl: true
-                    }
-                }
-            }
-        });
+        if (endDate) {
+            query = query.where('createdAt', '<=', new Date(endDate));
+        }
 
-        // Get total count for pagination
-        const total = await prisma.notification.count({ where });
-        const unreadCount = await prisma.notification.count({
-            where: { ...where, read: false }
-        });
+        // Get notifications with user details
+        const notifications = await query
+            .leftJoin('user', 'notification.userId', 'user.id')
+            .select(
+                'notification.*',
+                'user.id as user_id',
+                'user.name as user_name',
+                'user.email as user_email',
+                'user.avatarUrl as user_avatarUrl'
+            )
+            .orderBy('notification.createdAt', 'desc')
+            .limit(limitNum)
+            .offset(offset);
 
-        // Convert BigInt to String
-        const serializedNotifications = notifications.map(notification => ({
-            ...notification,
-            id: notification.id.toString(),
-            userId: notification.userId.toString(),
-            user: notification.user ? {
-                ...notification.user,
-                id: notification.user.id.toString()
+        // Get counts
+        const [totalResult] = await db('notification')
+            .where('userId', req.user.id)
+            .count('* as total');
+
+        const [unreadResult] = await db('notification')
+            .where({
+                userId: req.user.id,
+                read: false
+            })
+            .count('* as count');
+
+        const total = parseInt(totalResult.total);
+        const unreadCount = parseInt(unreadResult.count);
+
+        // Format response
+        const formattedNotifications = notifications.map(notification => ({
+            id: notification.id,
+            userId: notification.userId,
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            data: notification.data ? JSON.parse(notification.data) : null,
+            read: Boolean(notification.read),
+            readAt: notification.readAt,
+            createdAt: notification.createdAt,
+            user: notification.user_id ? {
+                id: notification.user_id,
+                name: notification.user_name,
+                email: notification.user_email,
+                avatarUrl: notification.user_avatarUrl
             } : null
         }));
 
         res.json({
             success: true,
-            notifications: serializedNotifications,
+            notifications: serializeBigInt(formattedNotifications),
             pagination: {
                 page: pageNum,
                 limit: limitNum,
@@ -120,24 +116,22 @@ router.get('/', authMiddleware, async (req, res) => {
 // Get notification by ID
 router.get('/:id', authMiddleware, async (req, res) => {
     try {
-        const notificationId = BigInt(req.params.id);
+        const notificationId = req.params.id;
 
-        const notification = await prisma.notification.findUnique({
-            where: {
-                id: notificationId,
-                userId: req.user.id // Ensure user can only access their own notifications
-            },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        avatarUrl: true
-                    }
-                }
-            }
-        });
+        let notification = await db('notification as n')
+            .where({
+                'n.id': notificationId,
+                'n.userId': req.user.id
+            })
+            .leftJoin('user as u', 'n.userId', 'u.id')
+            .select(
+                'n.*',
+                'u.id as user_id',
+                'u.name as user_name',
+                'u.email as user_email',
+                'u.avatarUrl as user_avatarUrl'
+            )
+            .first();
 
         if (!notification) {
             return res.status(404).json({
@@ -147,22 +141,38 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
         // Mark as read when fetched individually
         if (!notification.read) {
-            await prisma.notification.update({
-                where: { id: notificationId },
-                data: { 
+            await db('notification')
+                .where('id', notificationId)
+                .update({
                     read: true,
                     readAt: new Date()
-                }
-            });
+                });
+            
             notification.read = true;
             notification.readAt = new Date();
         }
 
-        const serializedNotification = convertBigIntToString(notification);
+        const formattedNotification = {
+            id: notification.id,
+            userId: notification.userId,
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            data: notification.data ? JSON.parse(notification.data) : null,
+            read: Boolean(notification.read),
+            readAt: notification.readAt,
+            createdAt: notification.createdAt,
+            user: notification.user_id ? {
+                id: notification.user_id,
+                name: notification.user_name,
+                email: notification.user_email,
+                avatarUrl: notification.user_avatarUrl
+            } : null
+        };
 
         res.json({
             success: true,
-            notification: serializedNotification
+            notification: serializeBigInt(formattedNotification)
         });
 
     } catch (error) {
@@ -176,31 +186,32 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // Mark notification as read
 router.post('/:id/read', authMiddleware, async (req, res) => {
     try {
-        const notificationId = BigInt(req.params.id);
+        const notificationId = req.params.id;
 
-        const notification = await prisma.notification.update({
-            where: {
+        const [updatedCount] = await db('notification')
+            .where({
                 id: notificationId,
-                userId: req.user.id // Ensure user can only mark their own notifications as read
-            },
-            data: {
+                userId: req.user.id
+            })
+            .update({
                 read: true,
                 readAt: new Date()
-            }
-        });
+            });
 
-        if (!notification) {
+        if (updatedCount === 0) {
             return res.status(404).json({
                 error: 'Notification not found'
             });
         }
 
-        const serializedNotification = convertBigIntToString(notification);
+        const notification = await db('notification')
+            .where('id', notificationId)
+            .first();
 
         res.json({
             success: true,
             message: 'Notification marked as read',
-            notification: serializedNotification
+            notification: serializeBigInt(notification)
         });
 
     } catch (error) {
@@ -214,21 +225,20 @@ router.post('/:id/read', authMiddleware, async (req, res) => {
 // Mark all notifications as read
 router.post('/read-all', authMiddleware, async (req, res) => {
     try {
-        const result = await prisma.notification.updateMany({
-            where: {
+        const result = await db('notification')
+            .where({
                 userId: req.user.id,
                 read: false
-            },
-            data: {
+            })
+            .update({
                 read: true,
                 readAt: new Date()
-            }
-        });
+            });
 
         res.json({
             success: true,
             message: 'All notifications marked as read',
-            count: result.count
+            count: result
         });
 
     } catch (error) {
@@ -242,16 +252,16 @@ router.post('/read-all', authMiddleware, async (req, res) => {
 // Delete notification
 router.delete('/:id', authMiddleware, async (req, res) => {
     try {
-        const notificationId = BigInt(req.params.id);
+        const notificationId = req.params.id;
 
-        const notification = await prisma.notification.delete({
-            where: {
+        const [deletedCount] = await db('notification')
+            .where({
                 id: notificationId,
-                userId: req.user.id // Ensure user can only delete their own notifications
-            }
-        });
+                userId: req.user.id
+            })
+            .del();
 
-        if (!notification) {
+        if (deletedCount === 0) {
             return res.status(404).json({
                 error: 'Notification not found'
             });
@@ -273,17 +283,17 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 // Delete all read notifications
 router.delete('/read/all', authMiddleware, async (req, res) => {
     try {
-        const result = await prisma.notification.deleteMany({
-            where: {
+        const result = await db('notification')
+            .where({
                 userId: req.user.id,
                 read: true
-            }
-        });
+            })
+            .del();
 
         res.json({
             success: true,
             message: 'All read notifications deleted',
-            count: result.count
+            count: result
         });
 
     } catch (error) {
@@ -302,59 +312,76 @@ router.get('/stats/summary', authMiddleware, async (req, res) => {
         const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-        const [total, unread, today, thisWeek, thisMonth] = await Promise.all([
-            prisma.notification.count({ where: { userId: req.user.id } }),
-            prisma.notification.count({ where: { userId: req.user.id, read: false } }),
-            prisma.notification.count({ 
-                where: { 
-                    userId: req.user.id,
-                    createdAt: { gte: startOfDay }
+        const userId = req.user.id;
+
+        // Get all counts in parallel
+        const [total, unread, today, thisWeek, thisMonth, byType, last7Days] = await Promise.all([
+            // Total notifications
+            db('notification')
+                .where('userId', userId)
+                .count('* as total')
+                .then(result => parseInt(result[0].total)),
+            
+            // Unread notifications
+            db('notification')
+                .where({
+                    userId: userId,
+                    read: false
+                })
+                .count('* as count')
+                .then(result => parseInt(result[0].count)),
+            
+            // Today's notifications
+            db('notification')
+                .where('userId', userId)
+                .where('createdAt', '>=', startOfDay)
+                .count('* as count')
+                .then(result => parseInt(result[0].count)),
+            
+            // This week's notifications
+            db('notification')
+                .where('userId', userId)
+                .where('createdAt', '>=', startOfWeek)
+                .count('* as count')
+                .then(result => parseInt(result[0].count)),
+            
+            // This month's notifications
+            db('notification')
+                .where('userId', userId)
+                .where('createdAt', '>=', startOfMonth)
+                .count('* as count')
+                .then(result => parseInt(result[0].count)),
+            
+            // Count by type
+            db('notification')
+                .where('userId', userId)
+                .select('type')
+                .count('* as count')
+                .groupBy('type'),
+            
+            // Last 7 days activity
+            (async () => {
+                const days = [];
+                for (let i = 6; i >= 0; i--) {
+                    const date = new Date();
+                    date.setDate(date.getDate() - i);
+                    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+                    const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+
+                    const [result] = await db('notification')
+                        .where('userId', userId)
+                        .where('createdAt', '>=', start)
+                        .where('createdAt', '<', end)
+                        .count('* as count');
+
+                    days.push({
+                        date: date.toISOString().split('T')[0],
+                        count: parseInt(result.count)
+                    });
                 }
-            }),
-            prisma.notification.count({ 
-                where: { 
-                    userId: req.user.id,
-                    createdAt: { gte: startOfWeek }
-                }
-            }),
-            prisma.notification.count({ 
-                where: { 
-                    userId: req.user.id,
-                    createdAt: { gte: startOfMonth }
-                }
-            })
+                return days;
+            })()
         ]);
-
-        // Count by type
-        const byType = await prisma.notification.groupBy({
-            by: ['type'],
-            where: { userId: req.user.id },
-            _count: true
-        });
-
-        // Last 7 days activity
-        const last7Days = [];
-        for (let i = 6; i >= 0; i--) {
-            const date = new Date();
-            date.setDate(date.getDate() - i);
-            const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-            const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
-
-            const count = await prisma.notification.count({
-                where: {
-                    userId: req.user.id,
-                    createdAt: {
-                        gte: start,
-                        lt: end
-                    }
-                }
-            });
-
-            last7Days.push({
-                date: date.toISOString().split('T')[0],
-                count
-            });
-        }
 
         res.json({
             success: true,
@@ -366,7 +393,7 @@ router.get('/stats/summary', authMiddleware, async (req, res) => {
                 thisMonth,
                 byType: byType.map(item => ({
                     type: item.type,
-                    count: item._count
+                    count: parseInt(item.count)
                 })),
                 last7Days
             }
@@ -391,24 +418,18 @@ router.post('/batch/read', authMiddleware, async (req, res) => {
             });
         }
 
-        // Convert string IDs to BigInt
-        const bigIntIds = notificationIds.map(id => BigInt(id));
-
-        const result = await prisma.notification.updateMany({
-            where: {
-                id: { in: bigIntIds },
-                userId: req.user.id // Security check
-            },
-            data: {
+        const result = await db('notification')
+            .whereIn('id', notificationIds)
+            .where('userId', req.user.id)
+            .update({
                 read: true,
                 readAt: new Date()
-            }
-        });
+            });
 
         res.json({
             success: true,
             message: 'Notifications marked as read',
-            count: result.count
+            count: result
         });
 
     } catch (error) {
@@ -422,14 +443,14 @@ router.post('/batch/read', authMiddleware, async (req, res) => {
 // Toggle notification read status
 router.post('/:id/toggle-read', authMiddleware, async (req, res) => {
     try {
-        const notificationId = BigInt(req.params.id);
+        const notificationId = req.params.id;
 
-        const notification = await prisma.notification.findUnique({
-            where: {
+        const notification = await db('notification')
+            .where({
                 id: notificationId,
                 userId: req.user.id
-            }
-        });
+            })
+            .first();
 
         if (!notification) {
             return res.status(404).json({
@@ -437,20 +458,23 @@ router.post('/:id/toggle-read', authMiddleware, async (req, res) => {
             });
         }
 
-        const updatedNotification = await prisma.notification.update({
-            where: { id: notificationId },
-            data: {
-                read: !notification.read,
-                readAt: notification.read ? null : new Date()
-            }
-        });
+        const newReadStatus = !notification.read;
 
-        const serializedNotification = convertBigIntToString(updatedNotification);
+        await db('notification')
+            .where('id', notificationId)
+            .update({
+                read: newReadStatus,
+                readAt: newReadStatus ? new Date() : null
+            });
+
+        const updatedNotification = await db('notification')
+            .where('id', notificationId)
+            .first();
 
         res.json({
             success: true,
-            message: `Notification marked as ${updatedNotification.read ? 'read' : 'unread'}`,
-            notification: serializedNotification
+            message: `Notification marked as ${newReadStatus ? 'read' : 'unread'}`,
+            notification: serializeBigInt(updatedNotification)
         });
 
     } catch (error) {

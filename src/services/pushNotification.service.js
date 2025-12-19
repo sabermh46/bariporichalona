@@ -1,5 +1,6 @@
+// src/services/pushNotification.service.js
 const webPush = require('web-push');
-const prisma = require("../config/prisma");
+const db = require("../config/knex");
 const crypto = require('crypto');
 
 class PushNotificationService {
@@ -25,56 +26,62 @@ class PushNotificationService {
     }
 
     // Save or update subscription
-    async saveSubscription(userId, subscription, userAgent) {
+     async saveSubscription(userId, subscription, userAgent) {
         const clientType = this.detectClientType(userAgent);
 
         try {
-            // Convert userId to BigInt for database operations
             const userIdBigInt = BigInt(userId);
 
             // Check if subscription already exists (by endpoint)
-            const existing = await prisma.pushSubscription.findUnique({
-                where: { endpoint: subscription.endpoint }
-            });
+            const existing = await db('pushsubscription')
+                .where({ endpoint: subscription.endpoint })
+                .first();
 
             if (existing) {
                 // If subscription exists for a different user, we have a conflict
-                if (existing.userId !== userIdBigInt) {
+                if (existing.userId.toString() !== userIdBigInt.toString()) {
                     // Delete the old subscription and create a new one
-                    await prisma.pushSubscription.delete({
-                        where: { id: existing.id }
+                    await db('pushsubscription')
+                        .where({ id: existing.id })
+                        .delete();
+
+                    const [newSubscriptionId] = await db('pushsubscription').insert({
+                        userId: userIdBigInt,
+                        endpoint: subscription.endpoint,
+                        p256dh: subscription.keys.p256dh,
+                        auth: subscription.keys.auth,
+                        userAgent,
+                        clientType,
+                        createdAt: new Date(),
+                        lastUsed: new Date()
                     });
 
-                    return await prisma.pushSubscription.create({
-                        data: {
-                            userId: userIdBigInt,
-                            endpoint: subscription.endpoint,
-                            p256dh: subscription.keys.p256dh,
-                            auth: subscription.keys.auth,
-                            userAgent,
-                            clientType
-                        }
-                    });
+                    return await db('pushsubscription')
+                        .where({ id: newSubscriptionId })
+                        .first();
                 } else {
                     // Update existing subscription for same user
-                    return await prisma.pushSubscription.update({
-                        where: { id: existing.id },
-                        data: {
+                    await db('pushsubscription')
+                        .where({ id: existing.id })
+                        .update({
                             p256dh: subscription.keys.p256dh,
                             auth: subscription.keys.auth,
                             userAgent,
                             clientType,
                             lastUsed: new Date()
-                        }
-                    });
+                            // Removed: updatedAt: new Date() - column doesn't exist
+                        });
+
+                    return await db('pushsubscription')
+                        .where({ id: existing.id })
+                        .first();
                 }
             }
 
             // Check user's existing subscriptions
-            const userSubscriptions = await prisma.pushSubscription.findMany({
-                where: { userId: userIdBigInt },
-                orderBy: { lastUsed: 'desc' }
-            });
+            const userSubscriptions = await db('pushsubscription')
+                .where({ userId: userIdBigInt })
+                .orderBy('lastUsed', 'desc');
 
             // If user has 2 subscriptions already, replace the least used one of same type
             if (userSubscriptions.length >= 2) {
@@ -83,44 +90,56 @@ class PushNotificationService {
                 if (sameTypeSubs.length > 0) {
                     // Replace the oldest same-type subscription
                     const oldestSameType = sameTypeSubs[sameTypeSubs.length - 1];
-                    return await prisma.pushSubscription.update({
-                        where: { id: oldestSameType.id },
-                        data: {
+                    await db('pushsubscription')
+                        .where({ id: oldestSameType.id })
+                        .update({
                             endpoint: subscription.endpoint,
                             p256dh: subscription.keys.p256dh,
                             auth: subscription.keys.auth,
                             userAgent,
                             lastUsed: new Date()
-                        }
-                    });
+                            // Removed: updatedAt: new Date() - column doesn't exist
+                        });
+
+                    return await db('pushsubscription')
+                        .where({ id: oldestSameType.id })
+                        .first();
                 } else {
                     // Replace the oldest subscription overall
                     const oldestSubscription = userSubscriptions[userSubscriptions.length - 1];
-                    return await prisma.pushSubscription.update({
-                        where: { id: oldestSubscription.id },
-                        data: {
+                    await db('pushsubscription')
+                        .where({ id: oldestSubscription.id })
+                        .update({
                             endpoint: subscription.endpoint,
                             p256dh: subscription.keys.p256dh,
                             auth: subscription.keys.auth,
                             userAgent,
                             clientType,
                             lastUsed: new Date()
-                        }
-                    });
+                            // Removed: updatedAt: new Date() - column doesn't exist
+                        });
+
+                    return await db('pushsubscription')
+                        .where({ id: oldestSubscription.id })
+                        .first();
                 }
             }
 
             // Create new subscription
-            return await prisma.pushSubscription.create({
-                data: {
-                    userId: userIdBigInt,
-                    endpoint: subscription.endpoint,
-                    p256dh: subscription.keys.p256dh,
-                    auth: subscription.keys.auth,
-                    userAgent,
-                    clientType
-                }
+            const [subscriptionId] = await db('pushsubscription').insert({
+                userId: userIdBigInt,
+                endpoint: subscription.endpoint,
+                p256dh: subscription.keys.p256dh,
+                auth: subscription.keys.auth,
+                userAgent,
+                clientType,
+                createdAt: new Date(),
+                lastUsed: new Date()
             });
+
+            return await db('pushsubscription')
+                .where({ id: subscriptionId })
+                .first();
 
         } catch (error) {
             console.error('Error saving subscription:', error);
@@ -129,50 +148,22 @@ class PushNotificationService {
     }
 
     async removeSubscription(endpoint) {
-        return await prisma.pushSubscription.delete({
-            where: { endpoint: endpoint }
-        });
-    }
-
-    // Helper function to convert BigInt to String
-    convertBigIntToString(obj) {
-        if (obj === null || obj === undefined) {
-            return obj;
-        }
-
-        if (typeof obj === 'bigint') {
-            return obj.toString();
-        }
-
-        if (Array.isArray(obj)) {
-            return obj.map(this.convertBigIntToString.bind(this));
-        }
-
-        if (typeof obj === 'object' && obj.constructor === Object) {
-            const newObj = {};
-            for (const key in obj) {
-                newObj[key] = this.convertBigIntToString(obj[key]);
-            }
-            return newObj;
-        }
-
-        return obj;
+        return await db('pushsubscription')
+            .where({ endpoint: endpoint })
+            .delete();
     }
 
     // Send notification to a single user
-async sendToUser(userId, title, body, data = {}) {
+    async sendToUser(userId, title, body, data = {}) {
     try {
-        // Convert userId to BigInt
         const userIdBigInt = BigInt(userId);
 
-        // Get subscriptions
-        const subscriptions = await prisma.pushSubscription.findMany({
-            where: { userId: userIdBigInt }
-        });
+        // 1. Get all active subscriptions for the user
+        const subscriptions = await db('pushsubscription')
+            .where({ userId: userIdBigInt })
+            .select('*');
 
         console.log(`Found ${subscriptions.length} subscriptions for user ${userId}`);
-
-        
 
         if (subscriptions.length === 0) {
             return {
@@ -181,31 +172,18 @@ async sendToUser(userId, title, body, data = {}) {
             };
         }
 
-        // Safely prepare data for JSON serialization
-        const safeJsonSerialize = (obj) => {
-            return JSON.parse(JSON.stringify(obj, (key, value) => {
-                if (typeof value === 'bigint') {
-                    return value.toString();
-                }
-                if (value instanceof Date) {
-                    return value.toISOString();
-                }
-                return value;
-            }));
-        };
-
-        // Create clean notification data
+        // 2. Prepare the clean notification data for JSON
         const notificationData = {
             url: data.url || '/dashboard',
             type: data.type || 'general',
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            userId: userId.toString() // Include userId for tracking
         };
 
-        // Only add extra data if it's safe
+        // Add extra safe metadata
         for (const key in data) {
             if (key !== 'url' && key !== 'type') {
                 try {
-                    // Test if the value can be serialized
                     JSON.stringify(data[key]);
                     notificationData[key] = data[key];
                 } catch (e) {
@@ -222,26 +200,20 @@ async sendToUser(userId, title, body, data = {}) {
             vibrate: [100, 50, 100],
             data: notificationData,
             actions: [
-                {
-                    action: 'view',
-                    title: 'View Details'
-                },
-                {
-                    action: 'dismiss',
-                    title: 'Dismiss'
-                }
+                { action: 'view', title: 'View Details' },
+                { action: 'dismiss', title: 'Dismiss' }
             ]
         };
 
-        console.log('Notification payload:', safeJsonSerialize(notificationPayload));
-
         const results = [];
+
+        // 3. Loop through subscriptions and attempt delivery
         for (const subscription of subscriptions) {
             let success = false;
             let errorMessage = null;
-            
+            let statusCode = null;
+
             try {
-                // Convert subscription to plain object with stringified BigInts
                 const pushSubscription = {
                     endpoint: subscription.endpoint,
                     keys: {
@@ -250,46 +222,47 @@ async sendToUser(userId, title, body, data = {}) {
                     }
                 };
 
-                // Send notification
                 await this.webPush.sendNotification(
                     pushSubscription,
                     JSON.stringify(notificationPayload)
                 );
                 success = true;
-                
             } catch (error) {
+                success = false;
                 errorMessage = error.message;
+                statusCode = error.statusCode;
                 console.error(`Send failed for subscription ${subscription.id}:`, errorMessage);
-                
-                // Remove invalid subscription
-                if (error.statusCode === 410 || error.statusCode === 404) {
-                    try {
-                        await prisma.pushSubscription.delete({
-                            where: { id: subscription.id }
-                        });
-                        console.log(`Removed invalid subscription: ${subscription.id}`);
-                    } catch (deleteError) {
-                        console.error(`Failed to delete subscription ${subscription.id}:`, deleteError.message);
-                    }
-                }
             }
 
-            // Log the attempt
+            // --- CRITICAL FIX: LOG FIRST ---
+            // Create the log while subscription.id still exists in the database
             try {
-                await prisma.pushNotificationLog.create({
-                    data: {
-                        userId: userIdBigInt,
-                        title,
-                        body,
-                        data: notificationData,
-                        subscriptionId: subscription.id,
-                        delivered: success,
-                        deliveredAt: success ? new Date() : null,
-                        error: errorMessage
-                    }
+                await db('pushnotificationlog').insert({
+                    userId: userIdBigInt,
+                    title,
+                    body,
+                    data: JSON.stringify(notificationData),
+                    subscriptionId: subscription.id, // Parent exists at this moment
+                    sentAt: new Date(),
+                    delivered: success,
+                    deliveredAt: success ? new Date() : null,
+                    error: errorMessage
                 });
             } catch (logError) {
                 console.error('Failed to create log:', logError.message);
+            }
+
+            // --- CRITICAL FIX: DELETE SECOND ---
+            // Now that the log is safely created, we can remove the invalid subscription
+            if (!success && (statusCode === 410 || statusCode === 404)) {
+                try {
+                    await db('pushsubscription')
+                        .where({ id: subscription.id })
+                        .delete();
+                    console.log(`Removed invalid subscription: ${subscription.id}`);
+                } catch (deleteError) {
+                    console.error(`Failed to delete subscription ${subscription.id}:`, deleteError.message);
+                }
             }
 
             results.push({
@@ -300,31 +273,29 @@ async sendToUser(userId, title, body, data = {}) {
             });
         }
 
-        // Create in-app notification
-        const notification = await prisma.notification.create({
-            data: {
-                uuid: crypto.randomUUID(),
-                userId: userIdBigInt,
-                title: title,
-                message: body,
-                type: data.type || 'info',
-                metadata: notificationData,
-                pushSent: results.some(r => r.success),
-                pushError: results.every(r => !r.success) ? 'All delivery attempts failed' : null
-            }
+        // 4. Create in-app notification record
+        const [notificationId] = await db('notification').insert({
+            uuid: crypto.randomUUID(),
+            userId: userIdBigInt,
+            title: title,
+            message: body,
+            type: data.type || 'info',
+            metadata: JSON.stringify(notificationData),
+            pushSent: results.some(r => r.success),
+            pushError: results.every(r => !r.success) ? 'All delivery attempts failed' : null,
+            createdAt: new Date()
         });
 
         return {
             success: results.some(r => r.success),
             results: results,
-            notificationId: notification.id.toString(),
+            notificationId: notificationId.toString(),
             totalSubscriptions: subscriptions.length,
             successfulDeliveries: results.filter(r => r.success).length
         };
 
     } catch (error) {
         console.error("Error in sendToUser:", error);
-        
         return {
             success: false,
             error: error.message,
@@ -335,17 +306,11 @@ async sendToUser(userId, title, body, data = {}) {
 
     async sendToRole(roleSlug, title, body, data = {}) {
         try {
-            const users = await prisma.user.findMany({
-                where: {
-                    role: {
-                        slug: roleSlug
-                    },
-                    status: 'active'
-                },
-                select: {
-                    id: true
-                }
-            });
+            const users = await db('user')
+                .join('role', 'user.roleId', 'role.id')
+                .where('role.slug', roleSlug)
+                .where('user.status', 'active')
+                .select('user.id');
 
             const results = [];
 
@@ -378,28 +343,24 @@ async sendToUser(userId, title, body, data = {}) {
 
     async sendToHouseStakeholders(houseId, title, body, data = {}) {
         try {
-            // Fix: Changed 'owners' to 'owner' since your schema has 'owner' relation
-            const house = await prisma.house.findUnique({
-                where: { id: houseId },
-                include: {
-                    owner: true, // Changed from 'owners' to 'owner'
-                    caretakers: {
-                        include: {
-                            caretaker: true
-                        }
-                    }
-                }
-            });
+            const house = await db('house')
+                .where({ id: BigInt(houseId) })
+                .first();
 
             if (!house) {
                 throw new Error('House not found');
             }
 
-            const userIds = [house.ownerId];
+            // Get caretakers for this house
+            const caretakers = await db('caretakerassignment')
+                .where({ houseId: BigInt(houseId) })
+                .select('caretakerId');
+
+            const userIds = [BigInt(house.ownerId)];
 
             // Add caretakers
-            house.caretakers.forEach(caretakerRel => {
-                userIds.push(caretakerRel.caretakerId);
+            caretakers.forEach(caretaker => {
+                userIds.push(BigInt(caretaker.caretakerId));
             });
 
             // Remove duplicates
@@ -443,11 +404,11 @@ async sendToUser(userId, title, body, data = {}) {
     async cleanupDuplicateSubscriptions() {
         try {
             console.log('Cleaning up duplicate subscriptions...');
-            
+
             // Find all subscriptions grouped by endpoint
-            const allSubscriptions = await prisma.pushSubscription.findMany({
-                orderBy: { createdAt: 'desc' }
-            });
+            const allSubscriptions = await db('pushsubscription')
+                .orderBy('createdAt', 'desc')
+                .select('*');
 
             const endpointMap = new Map();
             const duplicates = [];
@@ -464,9 +425,9 @@ async sendToUser(userId, title, body, data = {}) {
             // Delete duplicates
             for (const duplicate of duplicates) {
                 console.log(`Deleting duplicate subscription: ${duplicate.id} for user ${duplicate.userId}`);
-                await prisma.pushSubscription.delete({
-                    where: { id: duplicate.id }
-                });
+                await db('pushsubscription')
+                    .where({ id: duplicate.id })
+                    .delete();
             }
 
             console.log(`Cleaned up ${duplicates.length} duplicate subscriptions`);
@@ -481,9 +442,9 @@ async sendToUser(userId, title, body, data = {}) {
     // Method to fix subscription data (for debugging)
     async fixSubscriptionData(subscriptionId) {
         try {
-            const subscription = await prisma.pushSubscription.findUnique({
-                where: { id: subscriptionId }
-            });
+            const subscription = await db('pushsubscription')
+                .where({ id: subscriptionId })
+                .first();
 
             if (!subscription) {
                 throw new Error('Subscription not found');
@@ -507,9 +468,9 @@ async sendToUser(userId, title, body, data = {}) {
     async getUserSubscriptionsDebug(userId) {
         try {
             const userIdBigInt = BigInt(userId);
-            const subscriptions = await prisma.pushSubscription.findMany({
-                where: { userId: userIdBigInt }
-            });
+            const subscriptions = await db('pushsubscription')
+                .where({ userId: userIdBigInt })
+                .select('*');
 
             // Convert BigInt to strings
             return subscriptions.map(sub => ({
@@ -519,6 +480,31 @@ async sendToUser(userId, title, body, data = {}) {
             }));
         } catch (error) {
             console.error('Error getting user subscriptions:', error);
+            throw error;
+        }
+    }
+
+    async getNotificationStats(userId = null) {
+        try {
+            let query = db('notification');
+            
+            if (userId) {
+                query = query.where({ userId: BigInt(userId) });
+            }
+            
+            const total = await query.clone().count('* as count').first();
+            const read = await query.clone().where({ read: true }).count('* as count').first();
+            const sent = await query.clone().where({ pushSent: true }).count('* as count').first();
+            
+            return {
+                total: parseInt(total.count),
+                read: parseInt(read.count),
+                unread: parseInt(total.count) - parseInt(read.count),
+                pushSent: parseInt(sent.count),
+                pushFailed: parseInt(total.count) - parseInt(sent.count)
+            };
+        } catch (error) {
+            console.error('Error getting notification stats:', error);
             throw error;
         }
     }

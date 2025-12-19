@@ -7,7 +7,7 @@ const authMiddleware = require("../middleware/auth.middleware");
 const PushService = require("../services/push.service");
 const permissionService  = require("../services/permission.service");
 const { createTokens } = require("../utils/tokens");
-const prisma = require("../config/prisma");
+const db = require("../config/knex");
 
 router.get("/login/success", async (req, res)=>{
     if(req.user){
@@ -28,13 +28,12 @@ router.get("/login/success", async (req, res)=>{
             const permissions = await permissionService.getUserPermissions(serializedUser.id);
             
             // Update user's last login time
-            await prisma.user.update({
-                where: { id: serializedUser.id },
-                data: {
+            await db('user')
+                .where({ id: serializedUser.id })
+                .update({
                     lastLoginAt: new Date(),
-                    // lastLoginIp: req.ip // Uncomment if you want to track IP
-                }
-            });
+                    updatedAt: new Date()
+                });
 
             console.log("User permissions:", permissions);
             
@@ -43,10 +42,10 @@ router.get("/login/success", async (req, res)=>{
                 message: "Login Successful",
                 user: {
                     ...serializedUser,
-                    permission: permissions // Attach permissions to user object
+                    permission: permissions
                 },
                 ...tokens,
-                permission: permissions // Also include at top level for backward compatibility
+                permission: permissions
             });
         } catch (error) {
             console.error('Token creation error:', error);
@@ -77,7 +76,6 @@ router.get(
         failureRedirect: `${process.env.CLIENT_URL}/login?error=google_auth_failed`
     }),
     (req, res) => {
-        // Successful authentication, redirect to frontend with success
         res.redirect(`${process.env.CLIENT_URL}/auth/success`);
     }
 );
@@ -91,7 +89,6 @@ router.get(
 );
 
 router.get("/logout", authMiddleware, async (req, res, next) => {
-
     await PushService.removeAllPushSubscription(req.user?.id);
     
     req.logout(function(err) {

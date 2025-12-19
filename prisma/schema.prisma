@@ -1,5 +1,7 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  engineType    = "binary"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
@@ -150,6 +152,7 @@ model pushnotificationlog {
   delivered        Boolean           @default(false)
   deliveredAt      DateTime?
   opened           Boolean           @default(false)
+  createdAt        DateTime          @default(now())
   openedAt         DateTime?
   error            String?
   notification     notification?     @relation(fields: [notificationId], references: [id], map: "PushNotificationLog_notificationId_fkey")

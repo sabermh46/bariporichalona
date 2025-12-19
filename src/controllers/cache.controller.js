@@ -2,6 +2,7 @@
 const permissionService = require("../services/permission.service");
 const authMiddleware = require("../middleware/auth.middleware");
 const permissionCache = require("../utils/permissionCache");
+const db = require("../config/knex");
 
 class CacheController {
     
@@ -80,11 +81,7 @@ class CacheController {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
-            // Get all active users
-            const users = await prisma.user.findMany({
-                where: { status: 'active' },
-                select: { id: true }
-            });
+            const users = await db('users').where({ status: 'active' }).select('id');
 
             // Pre-cache permissions for all users
             const promises = users.map(user => 

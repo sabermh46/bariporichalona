@@ -1,9 +1,10 @@
-// routes/systemSettings.js
+// routes/admin/systemSettings.js
 const express = require('express');
-const prisma = require('../../config/prisma');
+const db = require('../../config/knex');
 const router = express.Router();
 const authMiddleware = require('../../middleware/auth.middleware');
 const roleMiddleware = require('../../middleware/role.middleware');
+
 // Apply authentication and admin role middleware to all routes
 router.use(authMiddleware);
 router.use(roleMiddleware(['web_owner', 'developer']));
@@ -11,11 +12,10 @@ router.use(roleMiddleware(['web_owner', 'developer']));
 // Get all system settings
 router.get('/', async (req, res) => {
     try {
-        const systemSettings = await prisma.systemSetting.findMany({
-            orderBy: {
-                category: 'asc',
-            }
-        });
+        const systemSettings = await db('systemsetting')
+            .select('*')
+            .orderBy('category', 'asc')
+            .orderBy('key', 'asc');
         
         res.json({
             success: true,
@@ -34,9 +34,9 @@ router.get('/', async (req, res) => {
 router.get('/:key', async (req, res) => {
     try {
         const { key } = req.params;
-        const setting = await prisma.systemSetting.findUnique({
-            where: { key }
-        });
+        const setting = await db('systemsetting')
+            .where({ key })
+            .first();
         
         if (!setting) {
             return res.status(404).json({
@@ -93,16 +93,35 @@ router.patch('/:id', async (req, res) => {
                 error: `Invalid value for type ${type}. Error: ${parseError.message}`
             });
         }
+
+        // Check if setting exists
+        const existingSetting = await db('systemsetting')
+            .where({ id: BigInt(id) })
+            .first();
+
+        if (!existingSetting) {
+            return res.status(404).json({
+                success: false,
+                error: "System setting not found."
+            });
+        }
         
-        const updatedSetting = await prisma.systemSetting.update({
-            where: { id: BigInt(id) },
-            data: {
-                value: parsedValue,
-                ...(type && { type }),
-                ...(category && { category }),
-                ...(isPublic !== undefined && { isPublic })
-            }
-        });
+        const updateData = {
+            value: parsedValue,
+            updatedAt: new Date()
+        };
+
+        if (type) updateData.type = type;
+        if (category) updateData.category = category;
+        if (isPublic !== undefined) updateData.isPublic = isPublic;
+
+        await db('systemsetting')
+            .where({ id: BigInt(id) })
+            .update(updateData);
+
+        const updatedSetting = await db('systemsetting')
+            .where({ id: BigInt(id) })
+            .first();
         
         res.json({
             success: true,
@@ -112,7 +131,7 @@ router.patch('/:id', async (req, res) => {
     } catch (error) {
         console.error("Error updating system setting:", error);
         
-        if (error.code === 'P2025') {
+        if (error.code === 'ER_BAD_FIELD_ERROR') {
             return res.status(404).json({
                 success: false,
                 error: "System setting not found."
@@ -126,14 +145,78 @@ router.patch('/:id', async (req, res) => {
     }
 });
 
+// Create new system setting
+router.post('/', async (req, res) => {
+    try {
+        const { key, value, type = 'string', category = 'general', isPublic = false } = req.body;
+
+        if (!key || value === undefined) {
+            return res.status(400).json({
+                success: false,
+                error: "Key and value are required."
+            });
+        }
+
+        // Check if setting already exists
+        const existingSetting = await db('systemsetting')
+            .where({ key })
+            .first();
+
+        if (existingSetting) {
+            return res.status(400).json({
+                success: false,
+                error: "System setting with this key already exists."
+            });
+        }
+
+        const [id] = await db('systemsetting').insert({
+            key,
+            value,
+            type,
+            category,
+            isPublic,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+
+        const newSetting = await db('systemsetting')
+            .where({ id })
+            .first();
+
+        res.status(201).json({
+            success: true,
+            data: newSetting,
+            message: "System setting created successfully."
+        });
+    } catch (error) {
+        console.error("Error creating system setting:", error);
+        res.status(500).json({
+            success: false,
+            error: "An error occurred while creating system setting."
+        });
+    }
+});
+
 // Delete system setting
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         
-        await prisma.systemSetting.delete({
-            where: { id: BigInt(id) }
-        });
+        // Check if setting exists
+        const existingSetting = await db('systemsetting')
+            .where({ id: BigInt(id) })
+            .first();
+
+        if (!existingSetting) {
+            return res.status(404).json({
+                success: false,
+                error: "System setting not found."
+            });
+        }
+
+        await db('systemsetting')
+            .where({ id: BigInt(id) })
+            .delete();
         
         res.json({
             success: true,
@@ -142,7 +225,7 @@ router.delete('/:id', async (req, res) => {
     } catch (error) {
         console.error("Error deleting system setting:", error);
         
-        if (error.code === 'P2025') {
+        if (error.code === 'ER_BAD_FIELD_ERROR') {
             return res.status(404).json({
                 success: false,
                 error: "System setting not found."

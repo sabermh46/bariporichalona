@@ -1,6 +1,7 @@
 const AuthService = require("../services/auth.service");
+const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
-
+const db = require("../config/knex");
 
 class AuthController {
   // Public registration
@@ -29,7 +30,6 @@ class AuthController {
       res.status(400).json({ error: err.message });
     }
   };
-
 
   async setPassword(req, res) {
     try {
@@ -61,7 +61,6 @@ class AuthController {
     }
   }
 
-
   async checkAccountLink(req, res) {
     try {
       const { email, googleId } = req.query;
@@ -76,6 +75,16 @@ class AuthController {
   async generateToken(req, res) {
     try {
       const { email, roleSlug, expiresInHours, metadata } = req.body;
+
+      if(req.user.role.slug === 'staff' ) {
+        if(roleSlug && (roleSlug !== 'house_owner' && roleSlug !== 'caretaker')) {
+          throw new Error("Staff can only generate tokens for House_Owner Or Caretaker role");
+        }
+        let hasThisPermission = await PermissionService.hasPermission(req.user.id, 'registrationToken.create');
+        if(!hasThisPermission) {
+          throw new Error("You do not have permission to generate registration tokens");
+        }
+      }
       
       const result = await AuthService.generateRegistrationToken(req.user.id, {
         email,
@@ -86,6 +95,7 @@ class AuthController {
 
       res.json(serializeBigInt(result));
     } catch (err) {
+      console.log(err);
       res.status(400).json({ error: err.message });
     }
   }
@@ -232,14 +242,13 @@ class AuthController {
   // Get system settings
   async getSystemSettings(req, res) {
     try {
-      const settings = await prisma.systemSetting.findMany({
-        where: {
-          OR: [
-            { isPublic: true },
-            { category: 'registration' }
-          ]
-        }
-      });
+      const settings = await db('system_setting')
+        .where(function() {
+          this.where('isPublic', true)
+              .orWhere('category', 'registration');
+        })
+        .select('*')
+        .orderBy('key');
 
       res.json(serializeBigInt(settings));
     } catch (err) {
@@ -257,16 +266,41 @@ class AuthController {
         return res.status(403).json({ error: 'Only web owner can update system settings' });
       }
 
-      const setting = await prisma.systemSetting.upsert({
-        where: { key },
-        update: { value },
-        create: {
+      const existingSetting = await db('system_setting')
+        .where('key', key)
+        .first();
+
+      let setting;
+      
+      if (existingSetting) {
+        // Update existing
+        await db('system_setting')
+          .where('key', key)
+          .update({
+            value: JSON.stringify(value),
+            type: typeof value,
+            updatedAt: new Date()
+          });
+        
+        setting = await db('system_setting')
+          .where('key', key)
+          .first();
+      } else {
+        // Insert new
+        const [id] = await db('system_setting').insert({
           key,
-          value,
+          value: JSON.stringify(value),
           type: typeof value,
-          category: 'general'
-        }
-      });
+          category: 'general',
+          isPublic: false,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        setting = await db('system_setting')
+          .where('id', id)
+          .first();
+      }
 
       res.json(serializeBigInt(setting));
     } catch (err) {
@@ -276,7 +310,11 @@ class AuthController {
 
   async getPublicRegistrationStatus(req, res) {
     try {
-      const isEnabled = await AuthService.getSettings('registration.public_enabled', false);
+      const setting = await db('system_setting')
+        .where('key', 'registration.public_enabled')
+        .first();
+      
+      const isEnabled = setting ? JSON.parse(setting.value) : false;
       res.json({ publicRegistrationEnabled: isEnabled });
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -286,26 +324,62 @@ class AuthController {
   // Get user's login-as sessions
   async getLoginAsSessions(req, res) {
     try {
-      const sessions = await prisma.userLoginAs.findMany({
-        where: {
-          OR: [
-            { userId: req.user.id },
-            { targetUserId: req.user.id }
-          ]
-        },
-        include: {
-          user: {
-            select: { id: true, name: true, email: true, role: true }
-          },
-          targetUser: {
-            select: { id: true, name: true, email: true, role: true }
-          },
-          originalRole: true
-        },
-        orderBy: { createdAt: 'desc' }
-      });
+      const sessions = await db('user_login_as as ula')
+        .where(function() {
+          this.where('ula.userId', req.user.id)
+              .orWhere('ula.targetUserId', req.user.id);
+        })
+        .leftJoin('user as u', 'ula.userId', 'u.id')
+        .leftJoin('user as tu', 'ula.targetUserId', 'tu.id')
+        .leftJoin('role as ur', 'u.roleId', 'ur.id')
+        .leftJoin('role as tur', 'tu.roleId', 'tur.id')
+        .leftJoin('role as or', 'ula.originalRoleId', 'or.id')
+        .select(
+          'ula.*',
+          'u.id as user_id',
+          'u.name as user_name',
+          'u.email as user_email',
+          'ur.slug as user_role_slug',
+          'tu.id as target_user_id',
+          'tu.name as target_user_name',
+          'tu.email as target_user_email',
+          'tur.slug as target_user_role_slug',
+          'or.slug as original_role_slug'
+        )
+        .orderBy('ula.createdAt', 'desc');
 
-      res.json(serializeBigInt(sessions));
+      // Format the response
+      const formattedSessions = sessions.map(session => ({
+        id: session.id,
+        userId: session.userId,
+        targetUserId: session.targetUserId,
+        sessionToken: session.sessionToken,
+        originalRoleId: session.originalRoleId,
+        reason: session.reason,
+        endedAt: session.endedAt,
+        createdAt: session.createdAt,
+        user: {
+          id: session.user_id,
+          name: session.user_name,
+          email: session.user_email,
+          role: {
+            slug: session.user_role_slug
+          }
+        },
+        targetUser: {
+          id: session.target_user_id,
+          name: session.target_user_name,
+          email: session.target_user_email,
+          role: {
+            slug: session.target_user_role_slug
+          }
+        },
+        originalRole: {
+          slug: session.original_role_slug
+        }
+      }));
+
+      res.json(serializeBigInt(formattedSessions));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

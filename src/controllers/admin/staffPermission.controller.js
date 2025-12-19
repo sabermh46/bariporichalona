@@ -1,6 +1,6 @@
-const prisma = require("../../config/prisma");
+// controllers/admin/staffPermission.controller.js
+const db = require("../../config/knex");
 const permissionService = require("../../services/permission.service");
-
 
 class StaffPermissionController {
 
@@ -9,88 +9,96 @@ class StaffPermissionController {
             const { search, page = 1, limit = 20 } = req.query;
             const pageNum = parseInt(page);
             const limitNum = parseInt(limit);
-            const skip = (pageNum - 1) * limitNum;
+            const offset = (pageNum - 1) * limitNum;
 
-            const where = {
-                role: {
-                    slug: 'staff'
-                },
-                status: 'active'
-            };
+            let query = db('user')
+                .join('role', 'user.roleId', 'role.id')
+                .where('role.slug', 'staff')
+                .where('user.status', 'active');
 
             if (search) {
-                where.OR = [
-                    { name: { contains: search } },
-                    { email: { contains: search } }
-                ];
+                query = query.where(function() {
+                    this.where('user.name', 'like', `%${search}%`)
+                        .orWhere('user.email', 'like', `%${search}%`);
+                });
             }
 
-            const total = await prisma.user.count({ where })
+            // Get total count
+            const totalQuery = query.clone();
+            const [{ total }] = await totalQuery.count('* as total');
 
-            const staffUsers = await prisma.user.findMany({
-                where,
-                select: {
-                    id: true,
-                    uuid: true,
-                    email: true,
-                    name: true,
-                    phone: true,
-                    avatarUrl: true,
-                    status: true,
-                    lastLoginAt: true,
-                    createdAt: true,
-                    parent: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true
-                        }
-                    },
-                    staffPermissionsAssigned: {
-                        where: {
-                            revokedAt: null
-                        },
-                        include: {
-                            permission: true,
-                            granter: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    email: true
-                                }
-                            }
-                        }
-                    }
-                },
-                skip,
-                take: limitNum,
-                orderBy: {
-                    createdAt: 'desc'
-                }
-            })
+            // Get staff users with permissions
+            const staffUsers = await query
+                .leftJoin('user as parent', 'user.parentId', 'parent.id')
+                .select(
+                    'user.id',
+                    'user.uuid',
+                    'user.email',
+                    'user.name',
+                    'user.phone',
+                    'user.avatarUrl',
+                    'user.status',
+                    'user.lastLoginAt',
+                    'user.createdAt',
+                    'parent.id as parent_id',
+                    'parent.name as parent_name',
+                    'parent.email as parent_email'
+                )
+                .offset(offset)
+                .limit(limitNum)
+                .orderBy('user.createdAt', 'desc');
 
-            const formatStaff = staffUsers.map(staff => ({
-                ...staff,
-                permissions: staff.staffPermissionsAssigned.map(sp => ({
-                    id: sp.permission.id,
-                    key: sp.permission.key,
-                    description: sp.permission.description,
-                    grantedAt: sp.grantedAt,
-                    grantedBy: sp.granter
-                })),
-                totalPermissions: staff.staffPermissionsAssigned.length
-            }))
+            // Get permissions for each staff member
+            const formattedStaff = [];
+            for (const staff of staffUsers) {
+                const staffPermissions = await db('staffpermission as sp')
+                    .join('permission as p', 'sp.permissionId', 'p.id')
+                    .leftJoin('user as granter', 'sp.grantedBy', 'granter.id')
+                    .where('sp.userId', staff.id)
+                    .whereNull('sp.revokedAt')
+                    .select(
+                        'p.id as permission_id',
+                        'p.key as permission_key',
+                        'p.description as permission_description',
+                        'sp.grantedAt',
+                        'granter.id as granter_id',
+                        'granter.name as granter_name',
+                        'granter.email as granter_email'
+                    );
+
+                formattedStaff.push({
+                    ...staff,
+                    id: staff.id.toString(),
+                    parent: staff.parent_id ? {
+                        id: staff.parent_id.toString(),
+                        name: staff.parent_name,
+                        email: staff.parent_email
+                    } : null,
+                    permissions: staffPermissions.map(sp => ({
+                        id: sp.permission_id.toString(),
+                        key: sp.permission_key,
+                        description: sp.permission_description,
+                        grantedAt: sp.grantedAt,
+                        grantedBy: sp.granter_id ? {
+                            id: sp.granter_id.toString(),
+                            name: sp.granter_name,
+                            email: sp.granter_email
+                        } : null
+                    })),
+                    totalPermissions: staffPermissions.length
+                });
+            }
 
             res.json({
                 success: true,
-                data: formatStaff,
+                data: formattedStaff,
                 pagination: {
-                    total,
+                    total: parseInt(total),
                     page: pageNum,
                     limit: limitNum,
                     totalPages: Math.ceil(total / limitNum)
                 }
-            })
+            });
             
         } catch (error) {
             console.error('Get staff list error:', error);
@@ -103,75 +111,21 @@ class StaffPermissionController {
 
     async getStaffDetails(req, res) {
         try {
-            
-            const {staffId} = req.params;
+            const { staffId } = req.params;
 
-            const staff = await prisma.user.findUnique({
-                where: {
-                    id: BigInt(staffId),
-                    role: {
-                        slug: "staff"
-                    }
-                },
-                select: {
-                    id: true,
-                    uuid: true,
-                    email: true,
-                    name: true,
-                    phone: true,
-                    avatarUrl: true,
-                    status: true,
-                    lastLoginAt: true,
-                    createdAt: true,
-                    metadata: true,
-                    parent: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true
-                        }
-                    },
-                    staffPermissionsAssigned: {
-                        where: {
-                            revokedAt: null
-                        },
-                        include: {
-                            permission: true,
-                            granter: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    email: true
-                                }
-                            }
-                        }
-                    },
-                    staffPermissionsGranted: {
-                        include: {
-                            permission: true,
-                            user: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    email: true
-                                }
-                            }
-                        }
-                    },
-                    staffPermissionsRevoked: {
-                        include: {
-                            permission: true,
-                            user: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    email: true
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            const staff = await db('user')
+                .where('user.id', BigInt(staffId))
+                .join('role', 'user.roleId', 'role.id')
+                .where('role.slug', 'staff')
+                .leftJoin('user as parent', 'user.parentId', 'parent.id')
+                .select(
+                    'user.*',
+                    'role.slug as role_slug',
+                    'parent.id as parent_id',
+                    'parent.name as parent_name',
+                    'parent.email as parent_email'
+                )
+                .first();
 
             if (!staff) {
                 return res.status(404).json({ 
@@ -180,26 +134,95 @@ class StaffPermissionController {
                 });
             }
 
+            // Get assigned permissions
+            const assignedPermissions = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .leftJoin('user as granter', 'sp.grantedBy', 'granter.id')
+                .where('sp.userId', BigInt(staffId))
+                .whereNull('sp.revokedAt')
+                .select(
+                    'p.id as permission_id',
+                    'p.key as permission_key',
+                    'p.description as permission_description',
+                    'sp.grantedAt',
+                    'granter.id as granter_id',
+                    'granter.name as granter_name',
+                    'granter.email as granter_email'
+                );
+
+            // Get permissions granted by this staff
+            const grantedToOthers = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .join('user as receiver', 'sp.userId', 'receiver.id')
+                .where('sp.grantedBy', BigInt(staffId))
+                .select(
+                    'p.key as permission_key',
+                    'receiver.id as user_id',
+                    'receiver.name as user_name',
+                    'receiver.email as user_email',
+                    'sp.grantedAt'
+                );
+
+            // Get permissions revoked by this staff
+            const revokedFromOthers = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .join('user as receiver', 'sp.userId', 'receiver.id')
+                .where('sp.revokedBy', BigInt(staffId))
+                .select(
+                    'p.key as permission_key',
+                    'receiver.id as user_id',
+                    'receiver.name as user_name',
+                    'receiver.email as user_email',
+                    'sp.revokedAt'
+                );
+
+            // Parse metadata if it exists
+            if (staff.metadata && typeof staff.metadata === 'string') {
+                try {
+                    staff.metadata = JSON.parse(staff.metadata);
+                } catch (e) {
+                    staff.metadata = {};
+                }
+            }
+
             const response = {
                 ...staff,
-                assignedPermissions: staff.staffPermissionsAssigned.map(sp => ({
-                    id: sp.permission.id,
-                    key: sp.permission.key,
-                    description: sp.permission.description,
+                id: staff.id.toString(),
+                parent: staff.parent_id ? {
+                    id: staff.parent_id.toString(),
+                    name: staff.parent_name,
+                    email: staff.parent_email
+                } : null,
+                assignedPermissions: assignedPermissions.map(sp => ({
+                    id: sp.permission_id.toString(),
+                    key: sp.permission_key,
+                    description: sp.permission_description,
                     grantedAt: sp.grantedAt,
-                    grantedBy: sp.granter
+                    grantedBy: sp.granter_id ? {
+                        id: sp.granter_id.toString(),
+                        name: sp.granter_name,
+                        email: sp.granter_email
+                    } : null
                 })),
-                grantedToOthers: staff.staffPermissionsGranted.map(sp => ({
-                    permission: sp.permission.key,
-                    user: sp.user,
-                    grantedAt: sp.grantedAt
+                grantedToOthers: grantedToOthers.map(g => ({
+                    permission: g.permission_key,
+                    user: {
+                        id: g.user_id.toString(),
+                        name: g.user_name,
+                        email: g.user_email
+                    },
+                    grantedAt: g.grantedAt
                 })),
-                revokedFromOthers: staff.staffPermissionsRevoked.map(sp => ({
-                    permission: sp.permission.key,
-                    user: sp.user,
-                    revokedAt: sp.revokedAt
+                revokedFromOthers: revokedFromOthers.map(r => ({
+                    permission: r.permission_key,
+                    user: {
+                        id: r.user_id.toString(),
+                        name: r.user_name,
+                        email: r.user_email
+                    },
+                    revokedAt: r.revokedAt
                 }))
-            }
+            };
 
             res.json({
                 success: true,
@@ -217,11 +240,9 @@ class StaffPermissionController {
 
     async getAvailablePermissions(req, res) {
         try {
-            const permissions = await prisma.permission.findMany({
-                orderBy: {
-                    key: 'asc'
-                }
-            })
+            const permissions = await db('permission')
+                .select('*')
+                .orderBy('key', 'asc');
 
             const grouped = {};
             permissions.forEach(perm => {
@@ -235,10 +256,19 @@ class StaffPermissionController {
             res.json({
                 success: true,
                 data: {
-                    all: permissions,
-                    grouped
+                    all: permissions.map(p => ({
+                        ...p,
+                        id: p.id.toString()
+                    })),
+                    grouped: Object.keys(grouped).reduce((acc, key) => {
+                        acc[key] = grouped[key].map(p => ({
+                            ...p,
+                            id: p.id.toString()
+                        }));
+                        return acc;
+                    }, {})
                 }
-            })
+            });
 
         } catch (error) {
             console.error('Get permissions error:', error);
@@ -265,8 +295,7 @@ class StaffPermissionController {
                 BigInt(staffId), 
                 BigInt(permissionId), 
                 req.user.id
-            )
-            
+            );
 
             res.json({
                 success: true,
@@ -297,7 +326,7 @@ class StaffPermissionController {
         }
     }
 
-     // Revoke permission from staff
+    // Revoke permission from staff
     async revokePermission(req, res) {
         try {
             const { staffId, permissionId } = req.params;
@@ -334,6 +363,7 @@ class StaffPermissionController {
         try {
             const { staffId } = req.params;
             const { permissionIds } = req.body;
+            
             if (!Array.isArray(permissionIds) || permissionIds.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -353,6 +383,7 @@ class StaffPermissionController {
                     );
                     results.push(result);
                 } catch (error) {
+                    console.error('Error granting permission ID', permissionId, error);
                     errors.push({
                         permissionId,
                         error: error.message
@@ -377,12 +408,11 @@ class StaffPermissionController {
         }
     }
 
-
     async bulkRevokePermissions(req, res) {
-
         try {
             const { staffId } = req.params;
             const { permissionIds } = req.body;
+            
             if (!Array.isArray(permissionIds) || permissionIds.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -402,6 +432,7 @@ class StaffPermissionController {
                     );
                     results.push(result);
                 } catch (error) {
+                    console.error('Error revoking permission ID', permissionId, error);
                     errors.push({
                         permissionId,
                         error: error.message
@@ -424,7 +455,6 @@ class StaffPermissionController {
                 error: 'Failed to bulk revoke permissions'
             });
         }
-
     }
 
     async getPermissionHistory(req, res) {
@@ -432,49 +462,48 @@ class StaffPermissionController {
             const { staffId } = req.params;
             const { limit = 50 } = req.query;
 
-            const history = await prisma.staffPermission.findMany({
-                where: {
-                    userId: BigInt(staffId)
-                },
-                include: {
-                    permission: true,
-                    granter: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true
-                        }
-                    },
-                    revoker: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true
-                        }
-                    }
-                },
-                orderBy: {
-                    grantedAt: 'desc'
-                },
-                take: parseInt(limit)
-            });
+            const history = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .leftJoin('user as granter', 'sp.grantedBy', 'granter.id')
+                .leftJoin('user as revoker', 'sp.revokedBy', 'revoker.id')
+                .where('sp.userId', BigInt(staffId))
+                .select(
+                    'sp.*',
+                    'p.key as permission_key',
+                    'p.description as permission_description',
+                    'granter.name as granter_name',
+                    'granter.email as granter_email',
+                    'revoker.name as revoker_name',
+                    'revoker.email as revoker_email'
+                )
+                .orderBy('sp.grantedAt', 'desc')
+                .limit(parseInt(limit));
 
             const formattedHistory = history.map(record => ({
-                id: record.id,
+                id: record.id.toString(),
                 permission: {
-                    id: record.permission.id,
-                    key: record.permission.key,
-                    description: record.permission.description
+                    id: record.permissionId.toString(),
+                    key: record.permission_key,
+                    description: record.permission_description
                 },
                 grantedAt: record.grantedAt,
-                grantedBy: record.granter,
+                grantedBy: record.granter_name ? {
+                    id: record.grantedBy.toString(),
+                    name: record.granter_name,
+                    email: record.granter_email
+                } : null,
                 revokedAt: record.revokedAt,
-                revokedBy: record.revoker,
+                revokedBy: record.revoker_name ? {
+                    id: record.revokedBy.toString(),
+                    name: record.revoker_name,
+                    email: record.revoker_email
+                } : null,
                 status: record.revokedAt ? 'revoked' : 'active',
                 duration: record.revokedAt ?
-                    record.revokedAt - record.grantedAt :
-                    Date.now() - record.grantedAt
-            }))
+                    new Date(record.revokedAt) - new Date(record.grantedAt) :
+                    Date.now() - new Date(record.grantedAt)
+            }));
+
             res.json({
                 success: true,
                 data: formattedHistory
@@ -490,9 +519,8 @@ class StaffPermissionController {
 
     async updateStaffStatus(req, res) {
         try {
-            
-            const {staffId} = req.params;
-            const {status} = req.body;
+            const { staffId } = req.params;
+            const { status, reason } = req.body;
 
             if (!['active', 'inactive', 'suspended'].includes(status)) {
                 return res.status(400).json({
@@ -501,14 +529,11 @@ class StaffPermissionController {
                 });
             }
 
-            const staff = await prisma.user.findUnique({
-                where: {
-                    id: BigInt(staffId),
-                    role: {
-                        slug: "staff"
-                    }
-                }
-            })
+            const staff = await db('user')
+                .where('user.id', BigInt(staffId))
+                .join('role', 'user.roleId', 'role.id')
+                .where('role.slug', 'staff')
+                .first();
 
             if (!staff) {
                 return res.status(404).json({ 
@@ -517,32 +542,43 @@ class StaffPermissionController {
                 });
             }
 
-            const updatedStaff = await prisma.user.update({
-                where: {
-                    id: BigInt(staffId)
-                },
-                data: {
-                    status,
-                    metadata: {
-                        ...staff.metadata,
-                        statusChangedAt: new Date().toISOString(),
-                        statusChangedBy: req.user.id,
-                        statusReason: req.body.reason || null
-                    }
-                },
-                select: {
-                    id: true,
-                    email: true,
-                    name: true,
-                    status: true,
-                    updatedAt: true
+            // Parse existing metadata
+            let metadata = {};
+            if (staff.metadata && typeof staff.metadata === 'string') {
+                try {
+                    metadata = JSON.parse(staff.metadata);
+                } catch (e) {
+                    metadata = {};
                 }
-            })
+            }
+
+            const updateData = {
+                status,
+                metadata: JSON.stringify({
+                    ...metadata,
+                    statusChangedAt: new Date().toISOString(),
+                    statusChangedBy: req.user.id,
+                    statusReason: reason || null
+                }),
+                updatedAt: new Date()
+            };
+
+            await db('user')
+                .where({ id: BigInt(staffId) })
+                .update(updateData);
+
+            const updatedStaff = await db('user')
+                .where({ id: BigInt(staffId) })
+                .select('id', 'email', 'name', 'status', 'updatedAt')
+                .first();
 
             res.json({
                 success: true,
                 message: `Staff status updated to ${status}`,
-                data: updatedStaff
+                data: updatedStaff ? {
+                    ...updatedStaff,
+                    id: updatedStaff.id.toString()
+                } : null
             });
 
         } catch (error) {
@@ -556,61 +592,83 @@ class StaffPermissionController {
 
     async getStaffActivity(req, res) {
         try {
-            const {staffId} = req.params;
+            const { staffId } = req.params;
             const { days = 30 } = req.query;
 
             const startDate = new Date();
             startDate.setDate(startDate.getDate() - parseInt(days));
 
-            const grantedPermissions = await prisma.staffPermission.count({
-                where: {
-                    grantedBy: BigInt(staffId),
-                    grantedAt: {
-                        gte: startDate
-                    }
-                }
-            })
+            // Get granted permissions count
+            const grantedResult = await db('staffpermission')
+                .where('grantedBy', BigInt(staffId))
+                .where('grantedAt', '>=', startDate)
+                .count('* as count')
+                .first();
+            
+            const grantedCount = parseInt(grantedResult?.count || 0);
 
-            const revokedPermissions = await prisma.staffPermission.count({
-                where: {
-                    revokedBy: BigInt(staffId),
-                    revokedAt: {
-                        gte: startDate
-                    }
-                }
-            })
+            // Get revoked permissions count
+            const revokedResult = await db('staffpermission')
+                .where('revokedBy', BigInt(staffId))
+                .where('revokedAt', '>=', startDate)
+                .count('* as count')
+                .first();
+            
+            const revokedCount = parseInt(revokedResult?.count || 0);
 
-            const lastActivity = await prisma.staffPermission.findFirst({
-                where: {
-                    OR: [
-                        { grantedBy: BigInt(staffId) },
-                        { revokedBy: BigInt(staffId) }
-                    ]
-                },
-                orderBy: {
-                    grantedAt: 'desc',
-                },
-                select: {
-                    grantedAt: true,
-                    permission: {
-                        select: {
-                            key: true
-                        }
-                    }
+            // Get last granted activity
+            const lastGranted = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .where('sp.grantedBy', BigInt(staffId))
+                .orderBy('sp.grantedAt', 'desc')
+                .select('sp.grantedAt', 'p.key as permission_key')
+                .first();
+
+            // Get last revoked activity
+            const lastRevoked = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .where('sp.revokedBy', BigInt(staffId))
+                .orderBy('sp.revokedAt', 'desc')
+                .select('sp.revokedAt', 'p.key as permission_key')
+                .first();
+
+            // Determine the most recent activity
+            let lastActivity = null;
+            if (lastGranted && lastRevoked) {
+                if (lastGranted.grantedAt > lastRevoked.revokedAt) {
+                    lastActivity = {
+                        time: lastGranted.grantedAt,
+                        action: 'granted',
+                        permission: lastGranted.permission_key
+                    };
+                } else {
+                    lastActivity = {
+                        time: lastRevoked.revokedAt,
+                        action: 'revoked',
+                        permission: lastRevoked.permission_key
+                    };
                 }
-            });
+            } else if (lastGranted) {
+                lastActivity = {
+                    time: lastGranted.grantedAt,
+                    action: 'granted',
+                    permission: lastGranted.permission_key
+                };
+            } else if (lastRevoked) {
+                lastActivity = {
+                    time: lastRevoked.revokedAt,
+                    action: 'revoked',
+                    permission: lastRevoked.permission_key
+                };
+            }
 
             res.json({
                 success: true,
                 data: {
-                    grantedPermissions,
-                    revokedPermissions,
-                    totalActivity: grantedPermissions + revokedPermissions,
-                    lastActivity: lastActivity ? {
-                        time: lastActivity.grantedAt,
-                        action: 'granted',
-                        permission: lastActivity.permission.key
-                    } : null,
+                    grantedPermissions: grantedCount,
+                    revokedPermissions: revokedCount,
+                    totalActivity: grantedCount + revokedCount,
+                    lastActivity: lastActivity,
                     period: `${days} days`
                 }
             });
@@ -626,53 +684,49 @@ class StaffPermissionController {
 
     async copyPermissions(req, res) {
         try {
-             const { sourceStaffId, targetStaffId } = req.body;
+            const { sourceStaffId, targetStaffId } = req.body;
 
-             if (!sourceStaffId || !targetStaffId) {
+            if (!sourceStaffId || !targetStaffId) {
                 return res.status(400).json({
                     success: false,
                     error: 'Source and target staff IDs are required'
                 });
-             }
+            }
 
-             if (sourceStaffId === targetStaffId) {
+            if (sourceStaffId === targetStaffId) {
                 return res.status(400).json({
                     success: false,
                     error: 'Source and target staff IDs cannot be the same'
                 });
-             }
+            }
 
-             const sourcePermissions = await prisma.staffPermission.findMany({
-                where: {
-                    userId: BigInt(sourceStaffId),
-                    revokedAt: null
-                },
-                include: {
-                    permission: true
-                }
-             });
+            const sourcePermissions = await db('staffpermission as sp')
+                .join('permission as p', 'sp.permissionId', 'p.id')
+                .where('sp.userId', BigInt(sourceStaffId))
+                .whereNull('sp.revokedAt')
+                .select('p.id as permission_id', 'p.key as permission_key');
 
-             if(sourcePermissions.length === 0) {
+            if (sourcePermissions.length === 0) {
                 return res.status(400).json({
                     success: false,
                     error: 'Source staff has no active permissions to copy'
                 });
-             }
+            }
 
-             const results = [];
-             const errors = [];
+            const results = [];
+            const errors = [];
 
             for (const sp of sourcePermissions) {
                 try {
                     await permissionService.grantPermissionToStaff(
                         BigInt(targetStaffId),
-                        sp.permissionId,
+                        BigInt(sp.permission_id),
                         req.user.id
                     );
-                    results.push(sp.permission.key);
+                    results.push(sp.permission_key);
                 } catch (error) {
                     errors.push({
-                        permission: sp.permission.key,
+                        permission: sp.permission_key,
                         error: error.message
                     });
                 }
