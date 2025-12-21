@@ -42,9 +42,9 @@ const authRoute = require("./src/routes/auth.routes");
 const googleRoute = require("./src/routes/google.routes");
 const apiCacheRoutes = require('./src/routes/cache.routes');
 const staffPermissionRoutes = require('./src/routes/admin/staffPermissions.routes');
-const houseRoutes = require('./src/routes/house.routes');
 const systemPermissionRoutes = require('./src/routes/admin/systemSettings.routes');
 const analyticsRoutes = require('./src/routes/analytics.route');
+const houseRoutes = require('./src/routes/house.routes');
 
 
 app.use("/auth", googleRoute);
@@ -56,6 +56,7 @@ app.use('/admin/permissions', staffPermissionRoutes);
 app.use('/houses', houseRoutes);
 app.use('/admin/system-settings', systemPermissionRoutes);
 app.use('/analytics', analyticsRoutes);
+app.use('/houses', houseRoutes);
 
 //write a running status endpoint at '/'
 app.get("/", (req, res) => {

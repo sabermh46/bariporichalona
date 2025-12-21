@@ -110,12 +110,8 @@ class HouseController {
                 });
             }
 
-            // Check house limits for the owner
-            const roleLimit = await db('role_limit')
-                .where('roleSlug', 'house_owner')
-                .first();
 
-            const maxHouses = roleLimit?.maxHouses || 1;
+            const maxHouses = 5;
 
             if (currentHouseCount >= maxHouses) {
                 return res.status(400).json({
@@ -210,6 +206,136 @@ class HouseController {
                 error: 'Failed to create house' 
             });
         }
+    }
+
+        // Helper method to get flat details with renter
+    async getFlatWithRenter(flatId) {
+        const flat = await db('flat as f')
+            .where('f.id', flatId)
+            .leftJoin('renter as r', 'f.renterId', 'r.id')
+            .select(
+                'f.*',
+                'r.id as renter_id',
+                'r.name as renter_name',
+                'r.phone as renter_phone',
+                'r.email as renter_email',
+                'r.status as renter_status'
+            )
+            .first();
+
+        if (!flat) return null;
+
+        const result = {
+            id: flat.id,
+            uuid: flat.uuid,
+            houseId: flat.houseId,
+            flatNumber: flat.number,
+            name: flat.name,
+            renterId: flat.renterId,
+            metadata: flat.metadata ? JSON.parse(flat.metadata) : {},
+            createdAt: flat.createdAt,
+            updatedAt: flat.updatedAt,
+            renter: null
+        };
+
+        if (flat.renterId) {
+            result.renter = {
+                id: flat.renter_id,
+                name: flat.renter_name,
+                phone: flat.renter_phone,
+                email: flat.renter_email,
+                status: flat.renter_status
+            };
+        }
+
+        return result;
+    }
+
+    // Method to assign renter to flat
+    async assignRenterToFlat(flatId, renterId) {
+        return await db.transaction(async (trx) => {
+            // Check if flat exists
+            const flat = await trx('flat')
+                .where('id', flatId)
+                .first();
+
+            if (!flat) {
+                throw new Error('Flat not found');
+            }
+
+            // Check if renter exists
+            const renter = await trx('renter')
+                .where('id', renterId)
+                .first();
+
+            if (!renter) {
+                throw new Error('Renter not found');
+            }
+
+            // Check if renter is already assigned to another flat
+            const existingAssignment = await trx('flat')
+                .where('renterId', renterId)
+                .where('id', '!=', flatId)
+                .first();
+
+            if (existingAssignment) {
+                throw new Error('Renter is already assigned to another flat');
+            }
+
+            // Update the flat with renterId
+            await trx('flat')
+                .where('id', flatId)
+                .update({
+                    renterId: renterId,
+                    updatedAt: new Date()
+                });
+
+            // Update renter metadata or status if needed
+            await trx('renter')
+                .where('id', renterId)
+                .update({
+                    status: 'active',
+                    updatedAt: new Date()
+                });
+
+            return this.getFlatWithRenter(flatId);
+        });
+    }
+
+    // Method to remove renter from flat
+    async removeRenterFromFlat(flatId) {
+        return await db.transaction(async (trx) => {
+            // Get flat with current renter
+            const flat = await trx('flat')
+                .where('id', flatId)
+                .first();
+
+            if (!flat) {
+                throw new Error('Flat not found');
+            }
+
+            if (!flat.renterId) {
+                throw new Error('Flat has no renter assigned');
+            }
+
+            // Update the flat to remove renterId
+            await trx('flat')
+                .where('id', flatId)
+                .update({
+                    renterId: null,
+                    updatedAt: new Date()
+                });
+
+            // Update renter status to inactive or available
+            await trx('renter')
+                .where('id', flat.renterId)
+                .update({
+                    status: 'inactive',
+                    updatedAt: new Date()
+                });
+
+            return this.getFlatWithRenter(flatId);
+        });
     }
 
     // Update house with new permission checks
@@ -428,7 +554,7 @@ class HouseController {
             }
 
             // Check if house has caretakers assigned
-            const [caretakerCountResult] = await db('caretaker_assignment')
+            const [caretakerCountResult] = await db('caretakerassignment')
                 .where('houseId', id)
                 .count('* as count');
 
@@ -601,7 +727,7 @@ class HouseController {
                 .count('* as count')
                 .groupBy('houseId');
 
-            const caretakerCounts = await db('caretaker_assignment')
+            const caretakerCounts = await db('caretakerassignment')
                 .whereIn('houseId', houseIds)
                 .select('houseId')
                 .count('* as count')
@@ -612,6 +738,13 @@ class HouseController {
                 .select('houseId')
                 .count('* as count')
                 .groupBy('houseId');
+
+            const occupiedCounts = await db('flat')
+            .whereIn('houseId', houseIds)
+            .whereNotNull('renterId')
+            .select('houseId')
+            .count('* as count')
+            .groupBy('houseId');
 
             // Create lookup objects
             const flatCountsMap = {};
@@ -679,181 +812,181 @@ class HouseController {
 
     // Get single house details
     async getHouseDetails(req, res) {
-        try {
-            const { id } = req.params;
+    try {
+        const { id } = req.params;
 
-            const house = await db('house as h')
-                .where('h.id', id)
-                .leftJoin('user as u', 'h.ownerId', 'u.id')
-                .leftJoin('role as r', 'u.roleId', 'r.id')
-                .select(
-                    'h.*',
-                    'u.id as owner_id',
-                    'u.name as owner_name',
-                    'u.email as owner_email',
-                    'u.phone as owner_phone',
-                    'r.slug as owner_role_slug'
-                )
-                .first();
+        const house = await db('house as h')
+            .where('h.id', id)
+            .leftJoin('user as u', 'h.ownerId', 'u.id')
+            .leftJoin('role as r', 'u.roleId', 'r.id')
+            .select(
+                'h.*',
+                'u.id as owner_id',
+                'u.name as owner_name',
+                'u.email as owner_email',
+                'u.phone as owner_phone',
+                'r.slug as owner_role_slug'
+            )
+            .first();
 
-            if (!house) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'House not found'
-                });
-            }
-
-            // Parse metadata
-            house.metadata = house.metadata ? JSON.parse(house.metadata) : {};
-            house.active = Boolean(house.active);
-
-            // Check access permissions
-            const hasAccess = await this.checkHouseAccess(req.user, house.id);
-            if (!hasAccess) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'You do not have permission to view this house'
-                });
-            }
-
-            // Get flats with renters
-            const flats = await db('flat as f')
-                .where('f.houseId', id)
-                .leftJoin('renter as ren', 'f.id', 'ren.flatId')
-                .select(
-                    'f.*',
-                    'ren.id as renter_id',
-                    'ren.name as renter_name',
-                    'ren.phone as renter_phone',
-                    'ren.status as renter_status'
-                );
-
-            // Group flats and renters
-            const groupedFlats = [];
-            const flatMap = {};
-
-            flats.forEach(row => {
-                if (!flatMap[row.id]) {
-                    flatMap[row.id] = {
-                        id: row.id,
-                        flatNumber: row.flatNumber,
-                        houseId: row.houseId,
-                        floor: row.floor,
-                        size: row.size,
-                        bedrooms: row.bedrooms,
-                        rentAmount: row.rentAmount,
-                        status: row.status,
-                        metadata: row.metadata ? JSON.parse(row.metadata) : {},
-                        createdAt: row.createdAt,
-                        updatedAt: row.updatedAt,
-                        renters: []
-                    };
-                    groupedFlats.push(flatMap[row.id]);
-                }
-
-                if (row.renter_id) {
-                    flatMap[row.id].renters.push({
-                        id: row.renter_id,
-                        name: row.renter_name,
-                        phone: row.renter_phone,
-                        status: row.renter_status
-                    });
-                }
-            });
-
-            // Get caretakers with permissions
-            const caretakers = await db('caretaker_assignment as ca')
-                .where('ca.houseId', id)
-                .leftJoin('user as c', 'ca.caretakerId', 'c.id')
-                .leftJoin('caretaker_assignment_permission as cap', 'ca.id', 'cap.caretakerAssignmentId')
-                .leftJoin('permission as p', 'cap.permissionId', 'p.id')
-                .select(
-                    'ca.*',
-                    'c.id as caretaker_id',
-                    'c.name as caretaker_name',
-                    'c.email as caretaker_email',
-                    'c.phone as caretaker_phone',
-                    'p.id as permission_id',
-                    'p.key as permission_key',
-                    'p.description as permission_description'
-                );
-
-            // Group caretakers and permissions
-            const groupedCaretakers = [];
-            const caretakerMap = {};
-
-            caretakers.forEach(row => {
-                if (!caretakerMap[row.id]) {
-                    caretakerMap[row.id] = {
-                        id: row.id,
-                        houseId: row.houseId,
-                        caretakerId: row.caretakerId,
-                        expiresAt: row.expiresAt,
-                        createdAt: row.createdAt,
-                        caretaker: {
-                            id: row.caretaker_id,
-                            name: row.caretaker_name,
-                            email: row.caretaker_email,
-                            phone: row.caretaker_phone
-                        },
-                        permissions: []
-                    };
-                    groupedCaretakers.push(caretakerMap[row.id]);
-                }
-
-                if (row.permission_id) {
-                    caretakerMap[row.id].permissions.push({
-                        id: row.permission_id,
-                        key: row.permission_key,
-                        description: row.permission_description
-                    });
-                }
-            });
-
-            // Get recent notices
-            const notices = await db('notice')
-                .where('houseId', id)
-                .orderBy('createdAt', 'desc')
-                .limit(5);
-
-            const formattedHouse = {
-                ...house,
-                owner: {
-                    id: house.owner_id,
-                    name: house.owner_name,
-                    email: house.owner_email,
-                    phone: house.owner_phone,
-                    role: {
-                        slug: house.owner_role_slug
-                    }
-                },
-                flats: groupedFlats,
-                caretakers: groupedCaretakers,
-                notices: notices.map(n => ({
-                    ...n,
-                    metadata: n.metadata ? JSON.parse(n.metadata) : {}
-                }))
-            };
-
-            // Remove joined fields
-            delete formattedHouse.owner_id;
-            delete formattedHouse.owner_name;
-            delete formattedHouse.owner_email;
-            delete formattedHouse.owner_phone;
-            delete formattedHouse.owner_role_slug;
-
-            res.json({
-                success: true,
-                data: serializeBigInt(formattedHouse)
-            });
-        } catch (error) {
-            console.error('Get house details error:', error);
-            res.status(500).json({ 
+        if (!house) {
+            return res.status(404).json({
                 success: false,
-                error: 'Failed to fetch house details' 
+                error: 'House not found'
             });
         }
+
+        // Parse metadata
+        house.metadata = house.metadata ? JSON.parse(house.metadata) : {};
+        house.active = Boolean(house.active);
+
+        // Check access permissions
+        const hasAccess = await this.checkHouseAccess(req.user, house.id);
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                error: 'You do not have permission to view this house'
+            });
+        }
+
+        // Get flats with renter (CORRECTED JOIN)
+        const flats = await db('flat as f')
+            .where('f.houseId', id)
+            .leftJoin('renter as ren', 'f.renterId', 'ren.id')
+            .select(
+                'f.*',
+                'ren.id as renter_id',
+                'ren.name as renter_name',
+                'ren.phone as renter_phone',
+                'ren.status as renter_status',
+                'ren.alternativePhone as renter_alternative_phone',
+                'ren.email as renter_email',
+                'ren.nid as renter_nid'
+            );
+
+        // Format flats - each flat has ONE renter (not array)
+        const formattedFlats = flats.map(row => {
+            const flat = {
+                id: row.id,
+                uuid: row.uuid,
+                houseId: row.houseId,
+                flatNumber: row.number, // Note: from schema, column is 'number' not 'flatNumber'
+                name: row.name,
+                metadata: row.metadata ? JSON.parse(row.metadata) : {},
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+                renter: null
+            };
+
+            // If there's a renterId, include renter details
+            if (row.renterId) {
+                flat.renter = {
+                    id: row.renter_id,
+                    name: row.renter_name,
+                    phone: row.renter_phone,
+                    alternativePhone: row.renter_alternative_phone,
+                    email: row.renter_email,
+                    nid: row.renter_nid,
+                    status: row.renter_status
+                };
+            }
+
+            return flat;
+        });
+
+        // Get caretakers with permissions
+        const caretakers = await db('caretakerassignment as ca')
+            .where('ca.houseId', id)
+            .leftJoin('user as c', 'ca.caretakerId', 'c.id')
+            .leftJoin('caretakerassignmentpermission as cap', 'ca.id', 'cap.caretakerAssignmentId')
+            .leftJoin('permission as p', 'cap.permissionId', 'p.id')
+            .select(
+                'ca.*',
+                'c.id as caretaker_id',
+                'c.name as caretaker_name',
+                'c.email as caretaker_email',
+                'c.phone as caretaker_phone',
+                'p.id as permission_id',
+                'p.key as permission_key',
+                'p.description as permission_description'
+            );
+
+        // Group caretakers and permissions
+        const groupedCaretakers = [];
+        const caretakerMap = {};
+
+        caretakers.forEach(row => {
+            if (!caretakerMap[row.id]) {
+                caretakerMap[row.id] = {
+                    id: row.id,
+                    houseId: row.houseId,
+                    caretakerId: row.caretakerId,
+                    expiresAt: row.expiresAt,
+                    createdAt: row.createdAt,
+                    caretaker: {
+                        id: row.caretaker_id,
+                        name: row.caretaker_name,
+                        email: row.caretaker_email,
+                        phone: row.caretaker_phone
+                    },
+                    permissions: []
+                };
+                groupedCaretakers.push(caretakerMap[row.id]);
+            }
+
+            if (row.permission_id) {
+                caretakerMap[row.id].permissions.push({
+                    id: row.permission_id,
+                    key: row.permission_key,
+                    description: row.permission_description
+                });
+            }
+        });
+
+        // Get recent notices
+        const notices = await db('notice')
+            .where('houseId', id)
+            .orderBy('createdAt', 'desc')
+            .limit(5);
+
+        const formattedHouse = {
+            ...house,
+            owner: {
+                id: house.owner_id,
+                name: house.owner_name,
+                email: house.owner_email,
+                phone: house.owner_phone,
+                role: {
+                    slug: house.owner_role_slug
+                }
+            },
+            flats: formattedFlats,
+            caretakers: groupedCaretakers,
+            notices: notices.map(n => ({
+                ...n,
+                metadata: n.metadata ? JSON.parse(n.metadata) : {}
+            }))
+        };
+
+        // Remove joined fields
+        delete formattedHouse.owner_id;
+        delete formattedHouse.owner_name;
+        delete formattedHouse.owner_email;
+        delete formattedHouse.owner_phone;
+        delete formattedHouse.owner_role_slug;
+
+        res.json({
+            success: true,
+            data: formattedHouse
+        });
+    } catch (error) {
+        console.error('Get house details error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to fetch house details' 
+        });
     }
+}
 
     // Get house statistics
     async getHouseStats(req, res) {
@@ -894,7 +1027,7 @@ class HouseController {
                         });
                     })
                     .count('* as count'),
-                db('caretaker_assignment')
+                db('caretakerassignmentpermission')
                     .whereIn('houseId', function() {
                         this.select('id').from('house');
                     })
@@ -977,6 +1110,13 @@ class HouseController {
         }
 
         return false;
+    }
+
+    // Helper: Get house details for permission check (without joins)
+    async getHouseDetailsForPermission(houseId) {
+        return await db('house')
+            .where('id', houseId)
+            .first();
     }
 }
 

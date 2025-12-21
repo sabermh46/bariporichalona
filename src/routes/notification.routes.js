@@ -254,7 +254,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     try {
         const notificationId = req.params.id;
 
-        const [deletedCount] = await db('notification')
+        const deletedCount = await db('notification')
             .where({
                 id: notificationId,
                 userId: req.user.id
