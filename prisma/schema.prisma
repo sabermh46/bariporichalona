@@ -72,6 +72,7 @@ model flat {
 model house {
   id                  BigInt                @id @default(autoincrement())
   uuid                String                @unique(map: "House_uuid_key") @db.VarChar(36)
+  name                String                @db.VarChar(255) @default("Unnamed House")
   ownerId             BigInt
   address             String
   metadata            String?               @db.LongText

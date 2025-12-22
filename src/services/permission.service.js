@@ -369,18 +369,14 @@ class PermissionService {
         .count("* as count")
         .first();
 
-      // Count caretaker assignments (active)
-      const [caretakerAssignments] = await db(
-        "caretakerassignmentpermission as cap"
-      )
-        .join("caretakerassignment as ca", "cap.caretakerAssignmentId", "ca.id")
-        .where("cap.permissionId", perm.id)
-        .where(function () {
-          this.where("ca.expiresAt", ">", new Date()).orWhereNull(
-            "ca.expiresAt"
-          );
+      const [caretakerAssignments] = await db('caretakerassignmentpermission as cap')
+        .join('caretakerassignment as ca', 'cap.caretakerAssignmentId', 'ca.id')
+        .where('cap.permissionId', perm.id)
+        .where(function() {
+            this.where('ca.expiresAt', '>', new Date())
+                .orWhereNull('ca.expiresAt');
         })
-        .count("* as count")
+        .count('* as count')
         .first();
 
       stats.push({

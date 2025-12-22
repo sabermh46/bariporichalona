@@ -111,6 +111,7 @@ class AnalyticsService {
         .leftJoin('user', 'house.ownerId', 'user.id')
         .select(
           'house.id',
+          'house.name',
           'house.address',
           'house.active',
           'house.createdAt',
@@ -144,6 +145,7 @@ class AnalyticsService {
       })),
       recentHouses: recentHouses.map(house => ({
         id: house.id,
+        name: house.name,
         address: house.address,
         active: house.active,
         owner: {
