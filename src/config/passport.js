@@ -25,7 +25,7 @@ passport.use(
 
                 // CASE 1: User exists with this googleId (Login)
                 let user = await db('user')
-                    .where({ googleId })
+                    .where('user.googleId', googleId)
                     .leftJoin('role', 'user.roleId', 'role.id')
                     .select(
                         'user.*',
@@ -63,10 +63,8 @@ passport.use(
 
                 // CASE 2: User exists with this email (Link Google account)
                 user = await db('user')
-                    .where({
-                        email: email,
-                        googleId: null
-                    })
+                    .where('user.email', email)
+                    .whereNull('user.googleId')
                     .leftJoin('role', 'user.roleId', 'role.id')
                     .select(
                         'user.*',
@@ -81,7 +79,7 @@ passport.use(
                     console.log(`Linking Google to existing user: ${user.email}`);
                     
                     await db('user')
-                        .where({ id: user.id })
+                        .where('user.id', user.id)
                         .update({
                             googleId: googleId,
                             emailVerifiedAt: new Date(),
@@ -92,7 +90,7 @@ passport.use(
 
                     // Get updated user with role
                     user = await db('user')
-                        .where({ id: user.id })
+                        .where('user.id', user.id)
                         .leftJoin('role', 'user.roleId', 'role.id')
                         .select(
                             'user.*',

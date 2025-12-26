@@ -1,7 +1,7 @@
 generator client {
   provider      = "prisma-client-js"
-  engineType    = "binary"
   binaryTargets = ["native", "debian-openssl-3.0.x"]
+  engineType    = "binary"
 }
 
 datasource db {
@@ -51,28 +51,128 @@ model device {
   @@index([userId], map: "Device_userId_idx")
 }
 
-model flat {
-  id        BigInt   @id @default(autoincrement())
-  uuid      String   @unique(map: "Flat_uuid_key") @db.VarChar(36)
-  houseId   BigInt
-  renterId  BigInt?  @unique(map: "Flat_renterId_key")
-  number    String?
-  metadata  String?  @db.LongText
-  createdAt DateTime @default(now())
-  updatedAt DateTime
-  name      String
-  house     house    @relation(fields: [houseId], references: [id], map: "Flat_houseId_fkey")
-  renter    renter?  @relation(fields: [renterId], references: [id], map: "Flat_renterId_fkey")
-  notice    notice[]
+model rent_payment {
+  id              BigInt               @id @default(autoincrement())
+  uuid            String?              @unique @db.VarChar(36)
+  flat_id         BigInt
+  renter_id       BigInt
+  house_id        BigInt
+  amount          Decimal              @db.Decimal(10, 2)
+  due_date        DateTime             @db.Date
+  paid_date       DateTime?            @db.Date
+  paid_amount     Decimal?             @db.Decimal(10, 2)
+  payment_method  payment_method_enum?
+  transaction_id  String?              @db.VarChar(100)
+  status          rent_status_enum?    @default(pending)
+  late_fee_amount Decimal?             @default(0.00) @db.Decimal(10, 2)
+  notes           String?              @db.Text
+  created_by      BigInt?
+  created_at      DateTime?            @default(now()) @db.Timestamp(0)
+  updated_at      DateTime?            @default(now()) @db.Timestamp(0)
+  user            user?                @relation(fields: [created_by], references: [id])
+  flat            flat                 @relation(fields: [flat_id], references: [id])
+  house           house                @relation(fields: [house_id], references: [id])
+  renter          renter               @relation(fields: [renter_id], references: [id])
 
-  @@index([houseId], map: "Flat_houseId_idx")
-  @@index([renterId], map: "Flat_renterId_idx")
+  @@index([due_date, status], map: "idx_rent_payment_due_date")
+  @@index([flat_id, status], map: "idx_rent_payment_flat_id")
+  @@index([created_by], map: "rent_payment_created_by_fkey")
+  @@index([house_id], map: "rent_payment_house_id_fkey")
+  @@index([renter_id], map: "rent_payment_renter_id_fkey")
+}
+
+model house_expense {
+  id             BigInt                @id @default(autoincrement())
+  uuid           String?               @unique @db.VarChar(36)
+  house_id       BigInt
+  category       expense_category_enum
+  amount         Decimal               @db.Decimal(10, 2)
+  description    String?               @db.Text
+  expense_date   DateTime              @db.Date
+  paid_by        BigInt?
+  payment_method payment_method_enum?
+  receipt_url    String?               @db.VarChar(500)
+  status         expense_status_enum?  @default(pending)
+  approved_by    BigInt?
+  metadata       String?               @db.LongText
+  created_at     DateTime?             @default(now()) @db.Timestamp(0)
+  updated_at     DateTime?             @default(now()) @db.Timestamp(0)
+  approvedByUser user?                 @relation("ExpenseApprovedBy", fields: [approved_by], references: [id])
+  house          house                 @relation(fields: [house_id], references: [id])
+  paidByUser     user?                 @relation("ExpensePaidBy", fields: [paid_by], references: [id])
+
+  @@index([house_id, expense_date], map: "idx_house_expense_house_id")
+  @@index([approved_by], map: "house_expense_approved_by_fkey")
+  @@index([paid_by], map: "house_expense_paid_by_fkey")
+}
+
+model app_fee_payment {
+  id             BigInt               @id @default(autoincrement())
+  uuid           String?              @unique @db.VarChar(36)
+  house_owner_id BigInt
+  house_id       BigInt
+  amount         Decimal              @db.Decimal(10, 2)
+  fee_type       fee_type_enum
+  due_date       DateTime             @db.Date
+  paid_date      DateTime?            @db.Date
+  payment_method payment_method_enum?
+  transaction_id String?              @db.VarChar(100)
+  status         fee_status_enum?     @default(pending)
+  invoice_url    String?              @db.VarChar(500)
+  metadata       String?              @db.LongText
+  created_at     DateTime?            @default(now()) @db.Timestamp(0)
+  updated_at     DateTime?            @default(now()) @db.Timestamp(0)
+  house          house                @relation(fields: [house_id], references: [id])
+  houseOwner     user                 @relation(fields: [house_owner_id], references: [id])
+
+  @@index([house_id], map: "app_fee_payment_house_id_fkey")
+  @@index([house_owner_id], map: "app_fee_payment_house_owner_id_fkey")
+}
+
+model financial_report {
+  id                   BigInt    @id @default(autoincrement())
+  house_id             BigInt
+  month                String?   @db.VarChar(7)
+  total_rent_due       Decimal?  @db.Decimal(10, 2)
+  total_rent_collected Decimal?  @db.Decimal(10, 2)
+  total_expenses       Decimal?  @db.Decimal(10, 2)
+  net_income           Decimal?  @db.Decimal(10, 2)
+  pending_payments     Int?
+  overdue_payments     Int?
+  generated_at         DateTime? @default(now()) @db.Timestamp(0)
+  house                house     @relation(fields: [house_id], references: [id])
+
+  @@index([house_id], map: "financial_report_house_id_fkey")
+}
+
+model flat {
+  id                  BigInt         @id @default(autoincrement())
+  uuid                String         @unique(map: "Flat_uuid_key") @db.VarChar(36)
+  number              String?
+  metadata            String?        @db.LongText
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime
+  name                String
+  last_rent_paid_date DateTime?
+  late_fee_percentage Decimal?       @default(5.00) @db.Decimal(5, 2)
+  rent_amount         Decimal?       @db.Decimal(10, 2)
+  rent_due_date       DateTime?
+  should_pay_rent_day Int            @default(10)
+  house_id            BigInt
+  renter_id           BigInt?        @unique
+  house               house          @relation(fields: [house_id], references: [id])
+  renter              renter?        @relation(fields: [renter_id], references: [id])
+  notice              notice[]
+  rent_payments       rent_payment[]
+  floor               Int?           @default(0)
+
+  @@index([house_id], map: "idx_flat_house_id")
+  @@index([renter_id], map: "idx_flat_renter_id")
 }
 
 model house {
   id                  BigInt                @id @default(autoincrement())
   uuid                String                @unique(map: "House_uuid_key") @db.VarChar(36)
-  name                String                @db.VarChar(255) @default("Unnamed House")
   ownerId             BigInt
   address             String
   metadata            String?               @db.LongText
@@ -80,10 +180,15 @@ model house {
   updatedAt           DateTime
   flatCount           BigInt                @default(0)
   active              Boolean               @default(false)
+  name                String                @default("Unnamed House") @db.VarChar(255)
+  app_fee_payments    app_fee_payment[]
   caretakerassignment caretakerassignment[]
+  financial_reports   financial_report[]
   flat                flat[]
   user                user                  @relation(fields: [ownerId], references: [id], map: "House_ownerId_fkey")
+  house_expenses      house_expense[]
   notice              notice[]
+  rent_payments       rent_payment[]
 
   @@index([ownerId], map: "House_ownerId_idx")
 }
@@ -218,8 +323,8 @@ model registrationtoken {
 }
 
 model renter {
-  id               BigInt   @id @default(autoincrement())
-  uuid             String   @unique(map: "Renter_uuid_key") @db.VarChar(36)
+  id               BigInt         @id @default(autoincrement())
+  uuid             String         @unique(map: "Renter_uuid_key") @db.VarChar(36)
   name             String
   phone            String?
   alternativePhone String?
@@ -227,13 +332,14 @@ model renter {
   nid              String?
   nidFrontImageUrl String?
   nidBackImageUrl  String?
-  status           String?  @default("active")
-  metadata         String?  @db.LongText
+  status           String?        @default("active")
+  metadata         String?        @db.LongText
   createdBy        BigInt?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime       @default(now())
   updatedAt        DateTime
   flat             flat?
-  user             user?    @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
+  rent_payments    rent_payment[]
+  user             user?          @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
 
   @@index([createdBy], map: "Renter_createdBy_fkey")
 }
@@ -344,10 +450,13 @@ model user {
   createdAt                                                 DateTime              @default(now())
   updatedAt                                                 DateTime
   deletedAt                                                 DateTime?
+  app_fee_payments                                          app_fee_payment[]
   caretakerassignment_caretakerassignment_caretakerIdTouser caretakerassignment[] @relation("caretakerassignment_caretakerIdTouser")
   caretakerassignment_caretakerassignment_createdByTouser   caretakerassignment[] @relation("caretakerassignment_createdByTouser")
   device                                                    device[]
   house                                                     house[]
+  approved_expenses                                         house_expense[]       @relation("ExpenseApprovedBy")
+  paid_expenses                                             house_expense[]       @relation("ExpensePaidBy")
   notice                                                    notice[]
   notification                                              notification[]
   pushnotificationlog                                       pushnotificationlog[]
@@ -355,6 +464,7 @@ model user {
   refreshtoken                                              refreshtoken[]
   registrationtoken_registrationtoken_createdByTouser       registrationtoken[]   @relation("registrationtoken_createdByTouser")
   registrationtoken_registrationtoken_usedByTouser          registrationtoken?    @relation("registrationtoken_usedByTouser")
+  rent_payments                                             rent_payment[]
   renter                                                    renter[]
   staffpermission_staffpermission_grantedByTouser           staffpermission[]     @relation("staffpermission_grantedByTouser")
   staffpermission_staffpermission_revokedByTouser           staffpermission[]     @relation("staffpermission_revokedByTouser")
@@ -388,4 +498,47 @@ model userloginas {
   @@index([originalRoleId], map: "UserLoginAs_originalRoleId_fkey")
   @@index([targetUserId], map: "UserLoginAs_targetUserId_idx")
   @@index([userId], map: "UserLoginAs_userId_idx")
+}
+
+enum payment_method_enum {
+  cash
+  bank
+  mobile_banking
+  other
+}
+
+enum rent_status_enum {
+  pending
+  paid
+  overdue
+  partial
+  cancelled
+}
+
+enum expense_category_enum {
+  maintenance
+  utility
+  repair
+  tax
+  salary
+  other
+}
+
+enum expense_status_enum {
+  pending
+  paid
+  approved
+  rejected
+}
+
+enum fee_type_enum {
+  monthly_subscription
+  transaction_fee
+  service_charge
+}
+
+enum fee_status_enum {
+  pending
+  paid
+  overdue
 }

@@ -3,7 +3,7 @@ const router = express.Router();
 const authMiddleware = require('../middleware/auth.middleware');
 const HouseController = require('../controllers/house.controller');
 const PermissionService = require('../services/permission.service');
-
+const db = require('../config/knex');
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
@@ -163,90 +163,89 @@ router.get('/owners/managed', async (req, res, next) => {
 });
 
 // Get house flats
-router.get('/:id/flats', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { page = 1, limit = 20 } = req.query;
+// router.get('/:id/flats', async (req, res, next) => {
+//     try {
+//         const { id } = req.params;
+//         const { page = 1, limit = 20 } = req.query;
         
-        const pageNum = parseInt(page);
-        const limitNum = parseInt(limit);
-        const offset = (pageNum - 1) * limitNum;
+//         const pageNum = parseInt(page);
+//         const limitNum = parseInt(limit);
+//         const offset = (pageNum - 1) * limitNum;
 
-        // Check access
-        const hasAccess = await HouseController.checkHouseAccess(req.user, id);
-        if (!hasAccess) {
-            return res.status(403).json({
-                success: false,
-                error: 'You do not have permission to view this house'
-            });
-        }
+//         // Check access
+//         const hasAccess = await HouseController.checkHouseAccess(req.user, id);
+//         if (!hasAccess) {
+//             return res.status(403).json({
+//                 success: false,
+//                 error: 'You do not have permission to view this house'
+//             });
+//         }
 
-        const flats = await db('flat')
-            .where('houseId', id)
-            .leftJoin('renter', 'flat.id', 'renter.flatId')
-            .select(
-                'flat.*',
-                'renter.id as renter_id',
-                'renter.name as renter_name',
-                'renter.phone as renter_phone',
-                'renter.status as renter_status'
-            )
-            .limit(limitNum)
-            .offset(offset)
-            .orderBy('flat.floor', 'asc')
-            .orderBy('flat.flatNumber', 'asc');
+//         const flats = await db('flat')
+//             .where('houseId', id)
+//             .leftJoin('renter', 'flat.id', 'renter.flatId')
+//             .select(
+//                 'flat.*',
+//                 'renter.id as renter_id',
+//                 'renter.name as renter_name',
+//                 'renter.phone as renter_phone',
+//                 'renter.status as renter_status'
+//             )
+//             .limit(limitNum)
+//             .offset(offset)
+//             .orderBy('flat.floor', 'asc')
+//             .orderBy('flat.flatNumber', 'asc');
 
-        const [totalResult] = await db('flat')
-            .where('houseId', id)
-            .count('* as total');
+//         const [totalResult] = await db('flat')
+//             .where('houseId', id)
+//             .count('* as total');
 
-        // Group flats by ID
-        const groupedFlats = [];
-        const flatMap = {};
+//         // Group flats by ID
+//         const groupedFlats = [];
+//         const flatMap = {};
 
-        flats.forEach(row => {
-            if (!flatMap[row.id]) {
-                flatMap[row.id] = {
-                    id: row.id,
-                    flatNumber: row.flatNumber,
-                    houseId: row.houseId,
-                    floor: row.floor,
-                    size: row.size,
-                    bedrooms: row.bedrooms,
-                    rentAmount: row.rentAmount,
-                    status: row.status,
-                    metadata: row.metadata ? JSON.parse(row.metadata) : {},
-                    createdAt: row.createdAt,
-                    updatedAt: row.updatedAt,
-                    renters: []
-                };
-                groupedFlats.push(flatMap[row.id]);
-            }
+//         flats.forEach(row => {
+//             if (!flatMap[row.id]) {
+//                 flatMap[row.id] = {
+//                     id: row.id,
+//                     flatNumber: row.flatNumber,
+//                     houseId: row.house_id,
+//                     floor: row.floor,
+//                     size: row.size,
+//                     rentAmount: row.rent_amount,
+//                     status: row.status,
+//                     metadata: row.metadata ? JSON.parse(row.metadata) : {},
+//                     createdAt: row.created_at,
+//                     updatedAt: row.updated_at,
+//                     renters: []
+//                 };
+//                 groupedFlats.push(flatMap[row.id]);
+//             }
 
-            if (row.renter_id) {
-                flatMap[row.id].renters.push({
-                    id: row.renter_id,
-                    name: row.renter_name,
-                    phone: row.renter_phone,
-                    status: row.renter_status
-                });
-            }
-        });
+//             if (row.renter_id) {
+//                 flatMap[row.id].renters.push({
+//                     id: row.renter_id,
+//                     name: row.renter_name,
+//                     phone: row.renter_phone,
+//                     status: row.renter_status
+//                 });
+//             }
+//         });
 
-        res.json({
-            success: true,
-            data: groupedFlats,
-            pagination: {
-                total: parseInt(totalResult.total),
-                page: pageNum,
-                limit: limitNum,
-                pages: Math.ceil(parseInt(totalResult.total) / limitNum)
-            }
-        });
-    } catch (error) {
-        next(error);
-    }
-});
+//         res.json({
+//             success: true,
+//             data: groupedFlats,
+//             pagination: {
+//                 total: parseInt(totalResult.total),
+//                 page: pageNum,
+//                 limit: limitNum,
+//                 pages: Math.ceil(parseInt(totalResult.total) / limitNum)
+//             }
+//         });
+//     } catch (error) {
+//         next(error);
+//     }
+// });
 
 // Get house caretakers
 router.get('/:id/caretakers', async (req, res, next) => {
@@ -320,60 +319,60 @@ router.get('/:id/caretakers', async (req, res, next) => {
 });
 
 // In your house routes or flat routes
-router.get('/:houseId/flats', async (req, res) => {
-    try {
-        const { houseId } = req.params;
-        const { page = 1, limit = 20, status } = req.query;
+// router.get('/:houseId/flats', async (req, res) => {
+//     try {
+//         const { houseId } = req.params;
+//         const { page = 1, limit = 20, status } = req.query;
         
-        let query = db('flat')
-            .where('houseId', houseId);
+//         let query = db('flat')
+//             .where('houseId', houseId);
 
-        if (status === 'occupied') {
-            query = query.whereNotNull('renterId');
-        } else if (status === 'vacant') {
-            query = query.whereNull('renterId');
-        }
+//         if (status === 'occupied') {
+//             query = query.whereNotNull('renterId');
+//         } else if (status === 'vacant') {
+//             query = query.whereNull('renterId');
+//         }
 
-        const flats = await query
-            .leftJoin('renter', 'flat.renterId', 'renter.id')
-            .select(
-                'flat.*',
-                'renter.name as renter_name',
-                'renter.phone as renter_phone',
-                'renter.status as renter_status'
-            )
-            .orderBy('flat.number', 'asc');
+//         const flats = await query
+//             .leftJoin('renter', 'flat.renterId', 'renter.id')
+//             .select(
+//                 'flat.*',
+//                 'renter.name as renter_name',
+//                 'renter.phone as renter_phone',
+//                 'renter.status as renter_status'
+//             )
+//             .orderBy('flat.number', 'asc');
 
-        // Format response
-        const formattedFlats = flats.map(flat => ({
-            id: flat.id,
-            uuid: flat.uuid,
-            houseId: flat.houseId,
-            number: flat.number,
-            name: flat.name,
-            renterId: flat.renterId,
-            metadata: flat.metadata ? JSON.parse(flat.metadata) : {},
-            createdAt: flat.createdAt,
-            updatedAt: flat.updatedAt,
-            renter: flat.renterId ? {
-                id: flat.renterId,
-                name: flat.renter_name,
-                phone: flat.renter_phone,
-                status: flat.renter_status
-            } : null
-        }));
+//         // Format response
+//         const formattedFlats = flats.map(flat => ({
+//             id: flat.id,
+//             uuid: flat.uuid,
+//             houseId: flat.houseId,
+//             number: flat.number,
+//             name: flat.name,
+//             renterId: flat.renterId,
+//             metadata: flat.metadata ? JSON.parse(flat.metadata) : {},
+//             createdAt: flat.createdAt,
+//             updatedAt: flat.updatedAt,
+//             renter: flat.renterId ? {
+//                 id: flat.renterId,
+//                 name: flat.renter_name,
+//                 phone: flat.renter_phone,
+//                 status: flat.renter_status
+//             } : null
+//         }));
 
-        res.json({
-            success: true,
-            data: formattedFlats
-        });
-    } catch (error) {
-        console.error('Get flats error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch flats'
-        });
-    }
-});
+//         res.json({
+//             success: true,
+//             data: formattedFlats
+//         });
+//     } catch (error) {
+//         console.error('Get flats error:', error);
+//         res.status(500).json({
+//             success: false,
+//             error: 'Failed to fetch flats'
+//         });
+//     }
+// });
 
 module.exports = router;

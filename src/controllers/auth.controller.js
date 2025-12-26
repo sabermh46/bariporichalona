@@ -53,8 +53,7 @@ class AuthController {
 
   async refreshToken(req, res) {
     try {
-      const { refreshToken } = req.body;
-      const data = await AuthService.refreshToken(refreshToken);
+      const data = await AuthService.refreshToken(req, res);
       res.json(serializeBigInt(data));
     } catch (err) {
       res.status(400).json({ error: err.message });

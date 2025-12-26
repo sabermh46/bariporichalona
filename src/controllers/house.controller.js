@@ -170,7 +170,7 @@ class HouseController {
       const responseHouse = {
         ...house,
         owner: {
-          id: house.owner_id,
+          id: house.ownerId,
           name: house.owner_name,
           email: house.owner_email,
           phone: house.owner_phone,
@@ -178,7 +178,7 @@ class HouseController {
       };
 
       // Remove joined fields
-      delete responseHouse.owner_id;
+      delete responseHouse.ownerId;
       delete responseHouse.owner_name;
       delete responseHouse.owner_email;
       delete responseHouse.owner_phone;
@@ -225,7 +225,7 @@ class HouseController {
     const result = {
       id: flat.id,
       uuid: flat.uuid,
-      houseId: flat.houseId,
+      houseId: flat.house_id,
       flatNumber: flat.number,
       name: flat.name,
       renterId: flat.renterId,
@@ -507,14 +507,14 @@ class HouseController {
       const responseHouse = {
         ...updatedHouse,
         owner: {
-          id: updatedHouse.owner_id,
+          id: updatedHouse.ownerId,
           name: updatedHouse.owner_name,
           email: updatedHouse.owner_email,
         },
       };
 
       // Remove joined fields
-      delete responseHouse.owner_id;
+      delete responseHouse.ownerId;
       delete responseHouse.owner_name;
       delete responseHouse.owner_email;
 
@@ -557,7 +557,7 @@ class HouseController {
 
       // Check if house has flats
       const [flatCountResult] = await db("flat")
-        .where("houseId", id)
+        .where("house_id", id)
         .count("* as count");
 
       if (parseInt(flatCountResult.count) > 0) {
@@ -736,10 +736,10 @@ class HouseController {
       const houseIds = houses.map((h) => h.id);
 
       const flatCounts = await db("flat")
-        .whereIn("houseId", houseIds)
-        .select("houseId")
+        .whereIn("house_id", houseIds)
+        .select("house_id")
         .count("* as count")
-        .groupBy("houseId");
+        .groupBy("house_id");
 
       const caretakerCounts = await db("caretakerassignment")
         .whereIn("houseId", houseIds)
@@ -754,16 +754,16 @@ class HouseController {
         .groupBy("houseId");
 
       const occupiedCounts = await db("flat")
-        .whereIn("houseId", houseIds)
-        .whereNotNull("renterId")
-        .select("houseId")
+        .whereIn("house_id", houseIds)
+        .whereNotNull("renter_id")
+        .select("house_id")
         .count("* as count")
-        .groupBy("houseId");
+        .groupBy("house_id");
 
       // Create lookup objects
       const flatCountsMap = {};
       flatCounts.forEach((f) => {
-        flatCountsMap[f.houseId] = parseInt(f.count);
+        flatCountsMap[f.house_id] = parseInt(f.count);
       });
 
       const caretakerCountsMap = {};
@@ -790,7 +790,7 @@ class HouseController {
           createdAt: house.createdAt,
           updatedAt: house.updatedAt,
           owner: {
-            id: house.owner_id,
+            id: house.ownerId,
             name: house.owner_name,
             email: house.owner_email,
             phone: house.owner_phone,
@@ -866,8 +866,8 @@ class HouseController {
 
       // Get flats with renter (CORRECTED JOIN)
       const flats = await db("flat as f")
-        .where("f.houseId", id)
-        .leftJoin("renter as ren", "f.renterId", "ren.id")
+        .where("f.house_id", id)
+        .leftJoin("renter as ren", "f.renter_id", "ren.id")
         .select(
           "f.*",
           "ren.id as renter_id",
@@ -884,7 +884,7 @@ class HouseController {
         const flat = {
           id: row.id,
           uuid: row.uuid,
-          houseId: row.houseId,
+          houseId: row.house_id,
           flatNumber: row.number, // Note: from schema, column is 'number' not 'flatNumber'
           name: row.name,
           metadata: row.metadata ? JSON.parse(row.metadata) : {},
@@ -971,7 +971,7 @@ class HouseController {
       const formattedHouse = {
         ...house,
         owner: {
-          id: house.owner_id,
+          id: house.ownerId,
           name: house.owner_name,
           email: house.owner_email,
           phone: house.owner_phone,
@@ -988,7 +988,7 @@ class HouseController {
       };
 
       // Remove joined fields
-      delete formattedHouse.owner_id;
+      delete formattedHouse.ownerId;
       delete formattedHouse.owner_name;
       delete formattedHouse.owner_email;
       delete formattedHouse.owner_phone;
@@ -1042,7 +1042,7 @@ class HouseController {
         ] = await Promise.all([
             houseQuery.clone().count("* as count"),
             db("flat")
-                .whereIn("houseId", allowedHouseIds)
+                .whereIn("house_id", allowedHouseIds)
                 .count("* as count"),
             // FIXED: Join through caretakerassignment to get houseId
             db("caretakerassignmentpermission as cap")

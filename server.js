@@ -45,6 +45,9 @@ const staffPermissionRoutes = require('./src/routes/admin/staffPermissions.route
 const systemPermissionRoutes = require('./src/routes/admin/systemSettings.routes');
 const analyticsRoutes = require('./src/routes/analytics.route');
 const houseRoutes = require('./src/routes/house.routes');
+const financialRoutes = require('./src//routes/financial.routes');
+const flatRoutes = require('./src/routes/flat.routes');
+// Add this after other middleware
 
 
 app.use("/auth", googleRoute);
@@ -57,6 +60,8 @@ app.use('/houses', houseRoutes);
 app.use('/admin/system-settings', systemPermissionRoutes);
 app.use('/analytics', analyticsRoutes);
 app.use('/houses', houseRoutes);
+app.use('/', financialRoutes);
+app.use('/', flatRoutes)
 
 //write a running status endpoint at '/'
 app.get("/", (req, res) => {

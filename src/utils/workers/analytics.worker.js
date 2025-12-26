@@ -110,7 +110,7 @@ const computeHouseStatistics = async () => {
 
   // Get houses with flats
   const housesWithFlats = await db('house as h')
-    .join('flat as f', 'h.id', 'f.houseId')
+    .join('flat as f', 'h.id', 'f.house_id')
     .distinct('h.id')
     .count('* as count')
     .first()
@@ -127,7 +127,7 @@ const computeHouseStatistics = async () => {
   // Get recent houses with details
   const recentHouses = await db('house as h')
     .leftJoin('user as u', 'h.ownerId', 'u.id')
-    .leftJoin('flat as f', 'h.id', 'f.houseId')
+    .leftJoin('flat as f', 'h.id', 'f.house_id')
     .leftJoin('caretakerassignment as ca', 'h.id', 'ca.houseId')
     .select(
       'h.*',
