@@ -9,9 +9,13 @@ const session = require("express-session");
 const cookieParser = require("cookie-parser");
 const pushRoutes = require("./src/routes/push.routes");
 const notificationRoutes = require('./src/routes/notification.routes');
+const fileAccessMiddleware = require('./src//middleware/fileAccessMiddleware');
+const path = require("path");
 
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// app.use(bodyParser.json());
+// app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 require("./src/config/passport");
 const { bigIntSerializer } = require("./src/utils/serializer");
@@ -38,6 +42,9 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session()); 
 
+
+
+
 const authRoute = require("./src/routes/auth.routes");
 const googleRoute = require("./src/routes/google.routes");
 const apiCacheRoutes = require('./src/routes/cache.routes');
@@ -47,7 +54,22 @@ const analyticsRoutes = require('./src/routes/analytics.route');
 const houseRoutes = require('./src/routes/house.routes');
 const financialRoutes = require('./src//routes/financial.routes');
 const flatRoutes = require('./src/routes/flat.routes');
-// Add this after other middleware
+const authMiddleware = require("./src/middleware/auth.middleware");
+const renterRoutes = require("./src/routes/renter.routes");
+
+
+// Serve uploaded files with access control
+app.use('/uploads', 
+    authMiddleware, // Optional: remove if you want to handle auth in fileAccessMiddleware
+    fileAccessMiddleware,
+    express.static(path.join(__dirname, 'uploads'), {
+        setHeaders: (res, filePath) => {
+            // Set appropriate headers for security
+            res.set('Cache-Control', 'private, max-age=3600');
+            res.set('X-Content-Type-Options', 'nosniff');
+        }
+    })
+);
 
 
 app.use("/auth", googleRoute);
@@ -62,6 +84,7 @@ app.use('/analytics', analyticsRoutes);
 app.use('/houses', houseRoutes);
 app.use('/', financialRoutes);
 app.use('/', flatRoutes)
+app.use('/', renterRoutes);
 
 //write a running status endpoint at '/'
 app.get("/", (req, res) => {

@@ -887,11 +887,29 @@ class HouseController {
           houseId: row.house_id,
           flatNumber: row.number, // Note: from schema, column is 'number' not 'flatNumber'
           name: row.name,
-          metadata: row.metadata ? JSON.parse(row.metadata) : {},
+          metadata: null, //Get house details error: SyntaxError: Unexpected token 'q', "qwert" is not valid JSON
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
           renter: null,
         };
+
+        if (row.metadata) {
+          if (typeof row.metadata === 'string') {
+            try {
+              flat.metadata = JSON.parse(row.metadata);
+            } catch (e) {
+              // If parsing fails, it's plain text
+              console.warn(`Flat ${row.id} has invalid JSON metadata:`, row.metadata);
+              flat.metadata = {
+                notes: row.metadata,
+                isPlainText: true
+              };
+            }
+          } else if (typeof row.metadata === 'object') {
+            // Already parsed by knex (if using JSON column type)
+            flat.metadata = row.metadata;
+          }
+        }
 
         // If there's a renterId, include renter details
         if (row.renterId) {

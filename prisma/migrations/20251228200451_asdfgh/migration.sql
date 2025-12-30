@@ -43,21 +43,122 @@ CREATE TABLE `device` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
+CREATE TABLE `rent_payment` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `uuid` VARCHAR(36) NULL,
+    `flat_id` BIGINT NOT NULL,
+    `renter_id` BIGINT NOT NULL,
+    `house_id` BIGINT NOT NULL,
+    `amount` DECIMAL(10, 2) NOT NULL,
+    `due_date` DATE NOT NULL,
+    `paid_date` DATE NULL,
+    `paid_amount` DECIMAL(10, 2) NULL,
+    `payment_method` ENUM('cash', 'bank', 'mobile_banking', 'other') NULL,
+    `transaction_id` VARCHAR(100) NULL,
+    `status` ENUM('pending', 'paid', 'overdue', 'partial', 'cancelled') NULL DEFAULT 'pending',
+    `late_fee_amount` DECIMAL(10, 2) NULL DEFAULT 0.00,
+    `notes` TEXT NULL,
+    `created_by` BIGINT NULL,
+    `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+    `updated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+
+    UNIQUE INDEX `rent_payment_uuid_key`(`uuid`),
+    INDEX `idx_rent_payment_due_date`(`due_date`, `status`),
+    INDEX `idx_rent_payment_flat_id`(`flat_id`, `status`),
+    INDEX `rent_payment_created_by_fkey`(`created_by`),
+    INDEX `rent_payment_house_id_fkey`(`house_id`),
+    INDEX `rent_payment_renter_id_fkey`(`renter_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `house_expense` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `uuid` VARCHAR(36) NULL,
+    `house_id` BIGINT NOT NULL,
+    `category` ENUM('maintenance', 'utility', 'repair', 'tax', 'salary', 'other') NOT NULL,
+    `amount` DECIMAL(10, 2) NOT NULL,
+    `description` TEXT NULL,
+    `expense_date` DATE NOT NULL,
+    `paid_by` BIGINT NULL,
+    `payment_method` ENUM('cash', 'bank', 'mobile_banking', 'other') NULL,
+    `receipt_url` VARCHAR(500) NULL,
+    `status` ENUM('pending', 'paid', 'approved', 'rejected') NULL DEFAULT 'pending',
+    `approved_by` BIGINT NULL,
+    `metadata` LONGTEXT NULL,
+    `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+    `updated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+
+    UNIQUE INDEX `house_expense_uuid_key`(`uuid`),
+    INDEX `idx_house_expense_house_id`(`house_id`, `expense_date`),
+    INDEX `house_expense_approved_by_fkey`(`approved_by`),
+    INDEX `house_expense_paid_by_fkey`(`paid_by`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `app_fee_payment` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `uuid` VARCHAR(36) NULL,
+    `house_owner_id` BIGINT NOT NULL,
+    `house_id` BIGINT NOT NULL,
+    `amount` DECIMAL(10, 2) NOT NULL,
+    `fee_type` ENUM('monthly_subscription', 'transaction_fee', 'service_charge') NOT NULL,
+    `due_date` DATE NOT NULL,
+    `paid_date` DATE NULL,
+    `payment_method` ENUM('cash', 'bank', 'mobile_banking', 'other') NULL,
+    `transaction_id` VARCHAR(100) NULL,
+    `status` ENUM('pending', 'paid', 'overdue') NULL DEFAULT 'pending',
+    `invoice_url` VARCHAR(500) NULL,
+    `metadata` LONGTEXT NULL,
+    `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+    `updated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+
+    UNIQUE INDEX `app_fee_payment_uuid_key`(`uuid`),
+    INDEX `app_fee_payment_house_id_fkey`(`house_id`),
+    INDEX `app_fee_payment_house_owner_id_fkey`(`house_owner_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `financial_report` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `house_id` BIGINT NOT NULL,
+    `month` VARCHAR(7) NULL,
+    `total_rent_due` DECIMAL(10, 2) NULL,
+    `total_rent_collected` DECIMAL(10, 2) NULL,
+    `total_expenses` DECIMAL(10, 2) NULL,
+    `net_income` DECIMAL(10, 2) NULL,
+    `pending_payments` INTEGER NULL,
+    `overdue_payments` INTEGER NULL,
+    `generated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+
+    INDEX `financial_report_house_id_fkey`(`house_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
 CREATE TABLE `flat` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `uuid` VARCHAR(36) NOT NULL,
-    `houseId` BIGINT NOT NULL,
-    `renterId` BIGINT NULL,
     `number` VARCHAR(191) NULL,
     `metadata` LONGTEXT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
     `name` VARCHAR(191) NOT NULL,
+    `last_rent_paid_date` DATETIME(3) NULL,
+    `late_fee_percentage` DECIMAL(5, 2) NULL DEFAULT 5.00,
+    `rent_amount` DECIMAL(10, 2) NULL,
+    `rent_due_date` DATETIME(3) NULL,
+    `should_pay_rent_day` INTEGER NOT NULL DEFAULT 10,
+    `house_id` BIGINT NOT NULL,
+    `renter_id` BIGINT NULL,
+    `floor` INTEGER NULL DEFAULT 0,
 
     UNIQUE INDEX `Flat_uuid_key`(`uuid`),
-    UNIQUE INDEX `Flat_renterId_key`(`renterId`),
-    INDEX `Flat_houseId_idx`(`houseId`),
-    INDEX `Flat_renterId_idx`(`renterId`),
+    UNIQUE INDEX `flat_renter_id_key`(`renter_id`),
+    INDEX `idx_flat_house_id`(`house_id`),
+    INDEX `idx_flat_renter_id`(`renter_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -72,6 +173,7 @@ CREATE TABLE `house` (
     `updatedAt` DATETIME(3) NOT NULL,
     `flatCount` BIGINT NOT NULL DEFAULT 0,
     `active` BOOLEAN NOT NULL DEFAULT false,
+    `name` VARCHAR(255) NOT NULL DEFAULT 'Unnamed House',
 
     UNIQUE INDEX `House_uuid_key`(`uuid`),
     INDEX `House_ownerId_idx`(`ownerId`),
@@ -401,10 +503,40 @@ ALTER TABLE `caretakerassignmentpermission` ADD CONSTRAINT `CaretakerAssignmentP
 ALTER TABLE `device` ADD CONSTRAINT `Device_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `flat` ADD CONSTRAINT `Flat_houseId_fkey` FOREIGN KEY (`houseId`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE `rent_payment` ADD CONSTRAINT `rent_payment_created_by_fkey` FOREIGN KEY (`created_by`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `flat` ADD CONSTRAINT `Flat_renterId_fkey` FOREIGN KEY (`renterId`) REFERENCES `renter`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE `rent_payment` ADD CONSTRAINT `rent_payment_flat_id_fkey` FOREIGN KEY (`flat_id`) REFERENCES `flat`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `rent_payment` ADD CONSTRAINT `rent_payment_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `rent_payment` ADD CONSTRAINT `rent_payment_renter_id_fkey` FOREIGN KEY (`renter_id`) REFERENCES `renter`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `house_expense` ADD CONSTRAINT `house_expense_approved_by_fkey` FOREIGN KEY (`approved_by`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `house_expense` ADD CONSTRAINT `house_expense_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `house_expense` ADD CONSTRAINT `house_expense_paid_by_fkey` FOREIGN KEY (`paid_by`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_house_owner_id_fkey` FOREIGN KEY (`house_owner_id`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `financial_report` ADD CONSTRAINT `financial_report_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `flat` ADD CONSTRAINT `flat_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `flat` ADD CONSTRAINT `flat_renter_id_fkey` FOREIGN KEY (`renter_id`) REFERENCES `renter`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `house` ADD CONSTRAINT `House_ownerId_fkey` FOREIGN KEY (`ownerId`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;

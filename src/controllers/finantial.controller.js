@@ -4,11 +4,24 @@ const { v4: uuidv4 } = require('uuid');
 const NotificationService = require('../services/emailSmsNotification.service');
 
 class FinancialController {
+
+    constructor() {
+        // bind all to fix the this.function() reading indefined
+        this.recordRentPayment = this.recordRentPayment.bind(this);
+        this.generateRentInvoices = this.generateRentInvoices.bind(this);
+        this.recordExpense = this.recordExpense.bind(this);
+        this.recordAppFeePayment = this.recordAppFeePayment.bind(this);
+        this.getFinancialDashboard = this.getFinancialDashboard.bind(this);
+        this.sendRentReminders = this.sendRentReminders.bind(this);
+
+        this.calculateNextDueDate = this.calculateNextDueDate.bind(this);
+    }
     // 1. Record rent payment (manual by house owner)
     async recordRentPayment(req, res) {
         try {
-            const { flat_id, payment_method, paid_amount, transaction_id, notes, paid_date } = req.body;
+            const { payment_method, paid_amount, transaction_id, notes, paid_date } = req.body;
             const userId = req.user.id;
+            const { id: flat_id } = req.params;
 
             // Get flat with renter and house info
             const flat = await db('flat')
@@ -90,7 +103,7 @@ class FinancialController {
                 // Update flat
                 await trx('flat').where('id', flat_id).update({
                     last_rent_paid_date: actualPaidDate,
-                    updated_at: new Date()
+                    updatedAt: new Date()
                 });
 
                 // Calculate next due date

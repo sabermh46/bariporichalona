@@ -4,10 +4,17 @@ const { v4: uuidv4 } = require("uuid");
 const { hasPermission } = require("../services/permission.service");
 
 class FlatController {
+
+    constructor() {
+            this.updateFlat = this.updateFlat.bind(this);
+            this.deleteFlat = this.deleteFlat.bind(this);
+            this.assignRenter = this.assignRenter.bind(this);
+            this.removeRenter = this.removeRenter.bind(this);
+        }
   // 1. Create flat (with flatCount limit check)
   async createFlat(req, res) {
     try {
-      const { number, name, rent_amount, should_pay_rent_day } = req.body;
+      const { number, name, rent_amount, should_pay_rent_day, late_fee_percentage, metadata } = req.body;
       const userId = req.user.id;
       const { houseId } = req.params; // From URL params
 
@@ -15,6 +22,27 @@ class FlatController {
       console.log("Request body:", req.body);
       console.log("User ID:", userId);
       console.log("User role:", req.user.role?.slug);
+
+      let metadataToStore = null;
+      if(metadata) {
+        if(typeof metadata === "string") {
+            try {
+                JSON.parse(metadata);
+                metadataToStore = metadata;
+            } catch (error) {
+                metadataToStore = JSON.stringify({ notes: metadata, createdBy: userId, createdAt: new Date().toISOString() });
+            }
+        } else if (typeof metadata === 'object') {
+            // Already an object, stringify it
+            metadataToStore = JSON.stringify({
+            ...metadata,
+            createdBy: req.user.id,
+            createdAt: new Date().toISOString()
+            });
+        }
+      }
+
+
 
       // For web_owner, allow without further checks
       if (req.user.role.slug === "web_owner") {
@@ -67,7 +95,9 @@ class FlatController {
           number,
           name,
           rent_amount,
-          should_pay_rent_day: should_pay_rent_day || 10,
+          metadata: metadataToStore,
+          late_fee_percentage,
+          should_pay_rent_day: should_pay_rent_day ?? 10,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -181,8 +211,10 @@ class FlatController {
         house_id: houseId,
         number,
         name,
+        late_fee_percentage,
+        metadata: metadataToStore,
         rent_amount,
-        should_pay_rent_day: should_pay_rent_day || 10,
+        should_pay_rent_day: should_pay_rent_day ?? 10,
         createdAt: new Date(),
         updatedAt: new Date(),
       }; 
@@ -211,7 +243,8 @@ class FlatController {
   // 2. Get flats with filters (vacant/occupied, houseId)
   async getFlats(req, res) {
     try {
-      const { house_id, status, search, page = 1, limit = 20 } = req.query;
+        const { houseId: house_id } = req.params;
+      const { status, search, page = 1, limit = 20 } = req.query;
       const userId = req.user.id;
       const offset = (page - 1) * limit;
 
@@ -397,8 +430,30 @@ class FlatController {
   async updateFlat(req, res) {
     try {
       const { id } = req.params;
-      const updates = req.body;
       const userId = req.user.id;
+      const updates = req.body;
+
+        // If metadata is being updated
+        if (updates.metadata) {
+        if (typeof updates.metadata === 'string') {
+            try {
+            // Try to parse if it's JSON
+            JSON.parse(updates.metadata);
+            // If it's valid JSON, keep it as is
+            } catch (e) {
+            // If it's plain text, wrap it
+            updates.metadata = JSON.stringify({
+                notes: updates.metadata,
+                updatedBy: userId,
+                updatedAt: new Date().toISOString()
+            });
+            }
+        } else if (typeof updates.metadata === 'object') {
+            updates.metadata = JSON.stringify(updates.metadata);
+        }
+        }
+
+        updates.updatedAt = new Date();
 
       // Get flat with house info
       const flat = await db("flat")
@@ -428,7 +483,7 @@ class FlatController {
       // Prepare update data
       const updateData = {
         ...updates,
-        updated_at: new Date(),
+        updatedAt: new Date(),
       };
 
       // If rent_amount or should_pay_rent_day changes, recalculate due dates
@@ -508,20 +563,9 @@ class FlatController {
         });
       }
 
-      // Soft delete or hard delete based on permission
-      if (req.user.role.slug === "web_owner") {
         await db("flat").where("id", id).delete();
-      } else {
-        // Soft delete
-        await db("flat").where("id", id).update({
-          deleted_at: new Date(),
-          renter_id: null,
-          updated_at: new Date(),
-        });
-      }
 
-      // Update house flat count
-      await db("house").where("id", flat.house_id).decrement("flatCount", 1);
+
 
       return res.json({
         success: true,
@@ -611,7 +655,7 @@ class FlatController {
           renter_id,
           last_rent_paid_date: null,
           rent_due_date: dueDate,
-          updated_at: new Date(),
+          updatedAt: new Date(),
         });
 
         // Create initial rent payment record
@@ -715,7 +759,7 @@ class FlatController {
           renter_id: null,
           last_rent_paid_date: null,
           rent_due_date: null,
-          updated_at: new Date(),
+          updatedAt: new Date(),
         });
 
         // Mark all future rent payments as cancelled
@@ -790,7 +834,7 @@ class FlatController {
 
     await db("flat").where("id", flatId).update({
       rent_due_date: dueDate,
-      updated_at: new Date(),
+      updatedAt: new Date(),
     });
 
     // Update pending rent payments
