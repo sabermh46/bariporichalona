@@ -10,6 +10,8 @@ class FlatController {
             this.deleteFlat = this.deleteFlat.bind(this);
             this.assignRenter = this.assignRenter.bind(this);
             this.removeRenter = this.removeRenter.bind(this);
+            this.checkFlatAccess = this.checkFlatAccess.bind(this);
+            this.getFlatDetails = this.getFlatDetails.bind(this);
         }
   // 1. Create flat (with flatCount limit check)
   async createFlat(req, res) {
@@ -795,8 +797,8 @@ class FlatController {
   async checkFlatAccess(userId, houseId) {
     const result = await db("house")
       .leftJoin("caretakerassignment", function () {
-        this.on("house.id", "=", "caretakerassignment.house_id").andOn(
-          "caretakerassignment.expires_at",
+        this.on("house.id", "=", "caretakerassignment.houseId").andOnVal(
+          "caretakerassignment.expiresAt",
           ">",
           new Date()
         );

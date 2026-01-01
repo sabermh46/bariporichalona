@@ -19,7 +19,7 @@ class FinancialController {
     // 1. Record rent payment (manual by house owner)
     async recordRentPayment(req, res) {
         try {
-            const { payment_method, paid_amount, transaction_id, notes, paid_date } = req.body;
+            const { payment_method, paid_amount, transaction_id, notes, paid_date, calculate_next_payment } = req.body;
             const userId = req.user.id;
             const { id: flat_id } = req.params;
 
@@ -106,28 +106,31 @@ class FinancialController {
                     updatedAt: new Date()
                 });
 
+                let nextDueDate = null;
+
                 // Calculate next due date
-                const nextDueDate = this.calculateNextDueDate(actualPaidDate, flat.should_pay_rent_day);
+                if(String(calculate_next_payment) === 'true') {
+                    nextDueDate = this.calculateNextDueDate(actualPaidDate, flat.should_pay_rent_day);
 
-                // Create next month's rent payment
-                const nextPayment = {
-                    uuid: uuidv4(),
-                    flat_id,
-                    renter_id: flat.renter_id,
-                    house_id: flat.house_id,
-                    amount: flat.rent_amount || 0,
-                    due_date: nextDueDate,
-                    status: 'pending',
-                    created_at: new Date(),
-                    updated_at: new Date()
-                };
+                    const nextPayment = {
+                        uuid: uuidv4(),
+                        flat_id,
+                        renter_id: flat.renter_id,
+                        house_id: flat.house_id,
+                        amount: flat.rent_amount || 0,
+                        due_date: nextDueDate,
+                        status: 'pending',
+                        created_at: new Date(),
+                        updated_at: new Date()
+                    };
 
-                await trx('rent_payment').insert(nextPayment);
+                    await trx('rent_payment').insert(nextPayment);
 
-                // Update flat with next due date
-                await trx('flat').where('id', flat_id).update({
-                    rent_due_date: nextDueDate
-                });
+                    // Update flat with next due date
+                    await trx('flat').where('id', flat_id).update({
+                        rent_due_date: nextDueDate
+                    });
+                    }
 
                 await trx.commit();
 
@@ -647,7 +650,7 @@ class FinancialController {
         const result = await db('house')
             .leftJoin('caretakerassignment', function() {
                 this.on('house.id', '=', 'caretakerassignment.houseId')
-                    .andOn('caretakerassignment.expiresAt', '>', new Date());
+                    .andOnVal('caretakerassignment.expiresAt', '>', new Date());
             })
             .where('house.id', houseId)
             .andWhere(function() {

@@ -667,6 +667,7 @@ class HouseController {
         search,
         sortBy = "createdAt",
         sortOrder = "desc",
+        withRenters = "true",
       } = req.query;
 
       const pageNum = parseInt(page);
@@ -702,14 +703,12 @@ class HouseController {
       }
 
       if (search) {
-        query = query.where(function () {
-          this.where("h.address", "like", `%${search}%`).orWhere(
-            "h.uuid",
-            "like",
-            `%${search}%`
-          );
-        });
-      }
+      query = query.where(function () {
+        this.where("h.address", "like", `%${search}%`)
+          .orWhere("h.name", "like", `%${search}%`)
+          .orWhere("h.uuid", "like", `%${search}%`);
+      });
+    }
 
       // Get total count
       const [totalResult] = await query.clone().count("* as total");
@@ -760,6 +759,49 @@ class HouseController {
         .count("* as count")
         .groupBy("house_id");
 
+      const renterCounts = await db("flat as f")
+      .whereIn("f.house_id", houseIds)
+      .whereNotNull("f.renter_id")
+      .innerJoin("renter as r", "f.renter_id", "r.id")
+      .select("f.house_id")
+      .countDistinct("r.id as count")
+      .groupBy("f.house_id");
+
+      let houseRenters = {};
+
+      if (withRenters === "true" || withRenters === true) {
+        const renters = await db("flat as f")
+          .whereIn("f.house_id", houseIds)
+          .whereNotNull("f.renter_id")
+          .innerJoin("renter as r", "f.renter_id", "r.id")
+          .select(
+            "f.house_id",
+            "r.id as renter_id",
+            "r.name as renter_name",
+            "r.phone as renter_phone",
+            "r.email as renter_email",
+            "r.status as renter_status",
+            "f.number as flat_number",
+            "f.name as flat_name"
+          ).orderBy("r.name", "asc");
+
+          houseRenters = renters.reduce((acc, row) => {
+            if (!acc[row.house_id]) {
+              acc[row.house_id] = [];
+            }
+            acc[row.house_id].push({
+              id: row.renter_id,
+              name: row.renter_name,
+              phone: row.renter_phone,
+              email: row.renter_email,
+              status: row.renter_status,
+              flat: row.flat_number ? `Flat ${row.flat_number}` : row.flat_name
+            });
+            return acc;
+          }, {});
+      }
+
+
       // Create lookup objects
       const flatCountsMap = {};
       flatCounts.forEach((f) => {
@@ -776,9 +818,19 @@ class HouseController {
         noticeCountsMap[n.houseId] = parseInt(n.count);
       });
 
+      const occupiedCountsMap = {};
+      occupiedCounts.forEach((o) => {
+        occupiedCountsMap[o.house_id] = parseInt(o.count);
+      });
+
+      const renterCountsMap = {};
+      renterCounts.forEach((r) => {
+        renterCountsMap[r.house_id] = parseInt(r.count);
+      });
+
       const formattedHouses = houses.map((house) => {
         const metadata = house.metadata ? JSON.parse(house.metadata) : {};
-        return {
+        const formattedHouse = {
           id: house.id,
           uuid: house.uuid,
           name: house.name,
@@ -800,10 +852,21 @@ class HouseController {
           },
           stats: {
             flats: flatCountsMap[house.id] || 0,
+            occupiedFlats: occupiedCountsMap[house.id] || 0,
+            renters: renterCountsMap[house.id] || 0,
+            vacantFlats:
+              (flatCountsMap[house.id] || 0) -
+              (occupiedCountsMap[house.id] || 0),
+            houseRenters: houseRenters[house.id] || [],
             caretakers: caretakerCountsMap[house.id] || 0,
             notices: noticeCountsMap[house.id] || 0,
           },
         };
+
+        if (withRenters && houseRenters[house.id]) {
+          formattedHouse.renters = houseRenters[house.id];
+        }
+        return formattedHouse;
       });
 
       res.json({
@@ -826,204 +889,465 @@ class HouseController {
   }
 
   // Get single house details
+  // async getHouseDetails(req, res) {
+  //   try {
+  //     const { id } = req.params;
+
+  //     const house = await db("house as h")
+  //       .where("h.id", id)
+  //       .leftJoin("user as u", "h.ownerId", "u.id")
+  //       .leftJoin("role as r", "u.roleId", "r.id")
+  //       .select(
+  //         "h.*",
+  //         "u.id as owner_id",
+  //         "u.name as owner_name",
+  //         "u.email as owner_email",
+  //         "u.phone as owner_phone",
+  //         "r.slug as owner_role_slug"
+  //       )
+  //       .first();
+
+  //     if (!house) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         error: "House not found",
+  //       });
+  //     }
+
+  //     // Parse metadata
+  //     house.metadata = house.metadata ? JSON.parse(house.metadata) : {};
+  //     house.active = Boolean(house.active);
+
+  //     // Check access permissions
+  //     const hasAccess = await this.checkHouseAccess(req.user, house.id);
+  //     if (!hasAccess) {
+  //       return res.status(403).json({
+  //         success: false,
+  //         error: "You do not have permission to view this house",
+  //       });
+  //     }
+
+  //     // Get flats with renter (CORRECTED JOIN)
+  //     const flats = await db("flat as f")
+  //       .where("f.house_id", id)
+  //       .leftJoin("renter as ren", "f.renter_id", "ren.id")
+  //       .select(
+  //         "f.*",
+  //         "ren.id as renter_id",
+  //         "ren.name as renter_name",
+  //         "ren.phone as renter_phone",
+  //         "ren.status as renter_status",
+  //         "ren.alternativePhone as renter_alternative_phone",
+  //         "ren.email as renter_email",
+  //         "ren.nid as renter_nid"
+  //       );
+
+  //     // Format flats - each flat has ONE renter (not array)
+  //     const formattedFlats = flats.map((row) => {
+  //       const flat = {
+  //         id: row.id,
+  //         uuid: row.uuid,
+  //         houseId: row.house_id,
+  //         flatNumber: row.number, // Note: from schema, column is 'number' not 'flatNumber'
+  //         name: row.name,
+  //         metadata: null, //Get house details error: SyntaxError: Unexpected token 'q', "qwert" is not valid JSON
+  //         createdAt: row.createdAt,
+  //         updatedAt: row.updatedAt,
+  //         renter: null,
+  //       };
+
+  //       if (row.metadata) {
+  //         if (typeof row.metadata === 'string') {
+  //           try {
+  //             flat.metadata = JSON.parse(row.metadata);
+  //           } catch (e) {
+  //             // If parsing fails, it's plain text
+  //             console.warn(`Flat ${row.id} has invalid JSON metadata:`, row.metadata);
+  //             flat.metadata = {
+  //               notes: row.metadata,
+  //               isPlainText: true
+  //             };
+  //           }
+  //         } else if (typeof row.metadata === 'object') {
+  //           // Already parsed by knex (if using JSON column type)
+  //           flat.metadata = row.metadata;
+  //         }
+  //       }
+
+  //       // If there's a renterId, include renter details
+  //       if (row.renterId) {
+  //         flat.renter = {
+  //           id: row.renter_id,
+  //           name: row.renter_name,
+  //           phone: row.renter_phone,
+  //           alternativePhone: row.renter_alternative_phone,
+  //           email: row.renter_email,
+  //           nid: row.renter_nid,
+  //           status: row.renter_status,
+  //         };
+  //       }
+
+  //       return flat;
+  //     });
+
+  //     // Get caretakers with permissions
+  //     const caretakers = await db("caretakerassignment as ca")
+  //       .where("ca.houseId", id)
+  //       .leftJoin("user as c", "ca.caretakerId", "c.id")
+  //       .leftJoin(
+  //         "caretakerassignmentpermission as cap",
+  //         "ca.id",
+  //         "cap.caretakerAssignmentId"
+  //       )
+  //       .leftJoin("permission as p", "cap.permissionId", "p.id")
+  //       .select(
+  //         "ca.*",
+  //         "c.id as caretaker_id",
+  //         "c.name as caretaker_name",
+  //         "c.email as caretaker_email",
+  //         "c.phone as caretaker_phone",
+  //         "p.id as permission_id",
+  //         "p.key as permission_key",
+  //         "p.description as permission_description"
+  //       );
+
+  //     // Group caretakers and permissions
+  //     const groupedCaretakers = [];
+  //     const caretakerMap = {};
+
+  //     caretakers.forEach((row) => {
+  //       if (!caretakerMap[row.id]) {
+  //         caretakerMap[row.id] = {
+  //           id: row.id,
+  //           houseId: row.houseId,
+  //           caretakerId: row.caretakerId,
+  //           expiresAt: row.expiresAt,
+  //           createdAt: row.createdAt,
+  //           caretaker: {
+  //             id: row.caretaker_id,
+  //             name: row.caretaker_name,
+  //             email: row.caretaker_email,
+  //             phone: row.caretaker_phone,
+  //           },
+  //           permissions: [],
+  //         };
+  //         groupedCaretakers.push(caretakerMap[row.id]);
+  //       }
+
+  //       if (row.permission_id) {
+  //         caretakerMap[row.id].permissions.push({
+  //           id: row.permission_id,
+  //           key: row.permission_key,
+  //           description: row.permission_description,
+  //         });
+  //       }
+  //     });
+
+  //     // Get recent notices
+  //     const notices = await db("notice")
+  //       .where("houseId", id)
+  //       .orderBy("createdAt", "desc")
+  //       .limit(5);
+
+  //     const formattedHouse = {
+  //       ...house,
+  //       owner: {
+  //         id: house.ownerId,
+  //         name: house.owner_name,
+  //         email: house.owner_email,
+  //         phone: house.owner_phone,
+  //         role: {
+  //           slug: house.owner_role_slug,
+  //         },
+  //       },
+  //       flats: formattedFlats,
+  //       caretakers: groupedCaretakers,
+  //       notices: notices.map((n) => ({
+  //         ...n,
+  //         metadata: n.metadata ? JSON.parse(n.metadata) : {},
+  //       })),
+  //     };
+
+  //     // Remove joined fields
+  //     delete formattedHouse.ownerId;
+  //     delete formattedHouse.owner_name;
+  //     delete formattedHouse.owner_email;
+  //     delete formattedHouse.owner_phone;
+  //     delete formattedHouse.owner_role_slug;
+
+  //     res.json({
+  //       success: true,
+  //       data: formattedHouse,
+  //     });
+  //   } catch (error) {
+  //     console.error("Get house details error:", error);
+  //     res.status(500).json({
+  //       success: false,
+  //       error: "Failed to fetch house details",
+  //     });
+  //   }
+  // }
   async getHouseDetails(req, res) {
-    try {
-      const { id } = req.params;
+  try {
+    const { id } = req.params;
+    const { withRenters = false } = req.query; // Optional parameter
 
-      const house = await db("house as h")
-        .where("h.id", id)
-        .leftJoin("user as u", "h.ownerId", "u.id")
-        .leftJoin("role as r", "u.roleId", "r.id")
-        .select(
-          "h.*",
-          "u.id as owner_id",
-          "u.name as owner_name",
-          "u.email as owner_email",
-          "u.phone as owner_phone",
-          "r.slug as owner_role_slug"
-        )
-        .first();
+    const house = await db("house as h")
+      .where("h.id", id)
+      .leftJoin("user as u", "h.ownerId", "u.id")
+      .leftJoin("role as r", "u.roleId", "r.id")
+      .select(
+        "h.*",
+        "u.id as owner_id",
+        "u.name as owner_name",
+        "u.email as owner_email",
+        "u.phone as owner_phone",
+        "r.slug as owner_role_slug"
+      )
+      .first();
 
-      if (!house) {
-        return res.status(404).json({
-          success: false,
-          error: "House not found",
-        });
-      }
-
-      // Parse metadata
-      house.metadata = house.metadata ? JSON.parse(house.metadata) : {};
-      house.active = Boolean(house.active);
-
-      // Check access permissions
-      const hasAccess = await this.checkHouseAccess(req.user, house.id);
-      if (!hasAccess) {
-        return res.status(403).json({
-          success: false,
-          error: "You do not have permission to view this house",
-        });
-      }
-
-      // Get flats with renter (CORRECTED JOIN)
-      const flats = await db("flat as f")
-        .where("f.house_id", id)
-        .leftJoin("renter as ren", "f.renter_id", "ren.id")
-        .select(
-          "f.*",
-          "ren.id as renter_id",
-          "ren.name as renter_name",
-          "ren.phone as renter_phone",
-          "ren.status as renter_status",
-          "ren.alternativePhone as renter_alternative_phone",
-          "ren.email as renter_email",
-          "ren.nid as renter_nid"
-        );
-
-      // Format flats - each flat has ONE renter (not array)
-      const formattedFlats = flats.map((row) => {
-        const flat = {
-          id: row.id,
-          uuid: row.uuid,
-          houseId: row.house_id,
-          flatNumber: row.number, // Note: from schema, column is 'number' not 'flatNumber'
-          name: row.name,
-          metadata: null, //Get house details error: SyntaxError: Unexpected token 'q', "qwert" is not valid JSON
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-          renter: null,
-        };
-
-        if (row.metadata) {
-          if (typeof row.metadata === 'string') {
-            try {
-              flat.metadata = JSON.parse(row.metadata);
-            } catch (e) {
-              // If parsing fails, it's plain text
-              console.warn(`Flat ${row.id} has invalid JSON metadata:`, row.metadata);
-              flat.metadata = {
-                notes: row.metadata,
-                isPlainText: true
-              };
-            }
-          } else if (typeof row.metadata === 'object') {
-            // Already parsed by knex (if using JSON column type)
-            flat.metadata = row.metadata;
-          }
-        }
-
-        // If there's a renterId, include renter details
-        if (row.renterId) {
-          flat.renter = {
-            id: row.renter_id,
-            name: row.renter_name,
-            phone: row.renter_phone,
-            alternativePhone: row.renter_alternative_phone,
-            email: row.renter_email,
-            nid: row.renter_nid,
-            status: row.renter_status,
-          };
-        }
-
-        return flat;
-      });
-
-      // Get caretakers with permissions
-      const caretakers = await db("caretakerassignment as ca")
-        .where("ca.houseId", id)
-        .leftJoin("user as c", "ca.caretakerId", "c.id")
-        .leftJoin(
-          "caretakerassignmentpermission as cap",
-          "ca.id",
-          "cap.caretakerAssignmentId"
-        )
-        .leftJoin("permission as p", "cap.permissionId", "p.id")
-        .select(
-          "ca.*",
-          "c.id as caretaker_id",
-          "c.name as caretaker_name",
-          "c.email as caretaker_email",
-          "c.phone as caretaker_phone",
-          "p.id as permission_id",
-          "p.key as permission_key",
-          "p.description as permission_description"
-        );
-
-      // Group caretakers and permissions
-      const groupedCaretakers = [];
-      const caretakerMap = {};
-
-      caretakers.forEach((row) => {
-        if (!caretakerMap[row.id]) {
-          caretakerMap[row.id] = {
-            id: row.id,
-            houseId: row.houseId,
-            caretakerId: row.caretakerId,
-            expiresAt: row.expiresAt,
-            createdAt: row.createdAt,
-            caretaker: {
-              id: row.caretaker_id,
-              name: row.caretaker_name,
-              email: row.caretaker_email,
-              phone: row.caretaker_phone,
-            },
-            permissions: [],
-          };
-          groupedCaretakers.push(caretakerMap[row.id]);
-        }
-
-        if (row.permission_id) {
-          caretakerMap[row.id].permissions.push({
-            id: row.permission_id,
-            key: row.permission_key,
-            description: row.permission_description,
-          });
-        }
-      });
-
-      // Get recent notices
-      const notices = await db("notice")
-        .where("houseId", id)
-        .orderBy("createdAt", "desc")
-        .limit(5);
-
-      const formattedHouse = {
-        ...house,
-        owner: {
-          id: house.ownerId,
-          name: house.owner_name,
-          email: house.owner_email,
-          phone: house.owner_phone,
-          role: {
-            slug: house.owner_role_slug,
-          },
-        },
-        flats: formattedFlats,
-        caretakers: groupedCaretakers,
-        notices: notices.map((n) => ({
-          ...n,
-          metadata: n.metadata ? JSON.parse(n.metadata) : {},
-        })),
-      };
-
-      // Remove joined fields
-      delete formattedHouse.ownerId;
-      delete formattedHouse.owner_name;
-      delete formattedHouse.owner_email;
-      delete formattedHouse.owner_phone;
-      delete formattedHouse.owner_role_slug;
-
-      res.json({
-        success: true,
-        data: formattedHouse,
-      });
-    } catch (error) {
-      console.error("Get house details error:", error);
-      res.status(500).json({
+    if (!house) {
+      return res.status(404).json({
         success: false,
-        error: "Failed to fetch house details",
+        error: "House not found",
       });
     }
+
+    // Parse metadata
+    house.metadata = house.metadata ? JSON.parse(house.metadata) : {};
+    house.active = Boolean(house.active);
+
+    // Check access permissions
+    const hasAccess = await this.checkHouseAccess(req.user, house.id);
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        error: "You do not have permission to view this house",
+      });
+    }
+
+    // Get flats with renter
+    const flats = await db("flat as f")
+      .where("f.house_id", id)
+      .leftJoin("renter as ren", "f.renter_id", "ren.id")
+      .select(
+        "f.*",
+        "ren.id as renter_id",
+        "ren.name as renter_name",
+        "ren.phone as renter_phone",
+        "ren.status as renter_status",
+        "ren.alternativePhone as renter_alternative_phone",
+        "ren.email as renter_email",
+        "ren.nid as renter_nid",
+        "ren.createdBy as renter_created_by"
+      );
+
+    // Get rent payment statistics
+    const paymentStats = await db("rent_payment as rp")
+      .where("rp.house_id", id)
+      .select(
+        db.raw('SUM(CASE WHEN rp.status = "paid" THEN rp.paid_amount ELSE 0 END) as total_collected'),
+        db.raw('SUM(CASE WHEN rp.status = "pending" THEN rp.amount ELSE 0 END) as total_pending'),
+        db.raw('SUM(CASE WHEN rp.status = "overdue" THEN rp.amount ELSE 0 END) as total_overdue'),
+        db.raw('COUNT(CASE WHEN rp.status = "paid" THEN 1 END) as paid_count'),
+        db.raw('COUNT(CASE WHEN rp.status = "pending" THEN 1 END) as pending_count'),
+        db.raw('COUNT(CASE WHEN rp.status = "overdue" THEN 1 END) as overdue_count')
+      )
+      .first();
+
+    // Format flats
+    const formattedFlats = flats.map((row) => {
+      const flat = {
+        id: row.id,
+        uuid: row.uuid,
+        houseId: row.house_id,
+        flatNumber: row.number,
+        name: row.name,
+        rentAmount: row.rent_amount,
+        shouldPayRentDay: row.should_pay_rent_day,
+        lateFeePercentage: row.late_fee_percentage,
+        floor: row.floor,
+        metadata: null,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        renter: null,
+      };
+
+      // Safely parse metadata
+      if (row.metadata) {
+        if (typeof row.metadata === 'string') {
+          try {
+            flat.metadata = JSON.parse(row.metadata);
+          } catch (e) {
+            flat.metadata = {
+              notes: row.metadata,
+              isPlainText: true
+            };
+          }
+        } else if (typeof row.metadata === 'object') {
+          flat.metadata = row.metadata;
+        }
+      }
+
+      // Add renter details if exists
+      if (row.renter_id) {
+        flat.renter = {
+          id: row.renter_id,
+          name: row.renter_name,
+          phone: row.renter_phone,
+          alternativePhone: row.renter_alternative_phone,
+          email: row.renter_email,
+          nid: row.renter_nid,
+          status: row.renter_status,
+          createdBy: row.renter_created_by,
+        };
+      }
+
+      return flat;
+    });
+
+    // Get caretakers with permissions
+    const caretakers = await db("caretakerassignment as ca")
+      .where("ca.houseId", id)
+      .andWhere("ca.expiresAt", ">", new Date())
+      .leftJoin("user as c", "ca.caretakerId", "c.id")
+      .leftJoin("role as cr", "c.roleId", "cr.id")
+      .leftJoin(
+        "caretakerassignmentpermission as cap",
+        "ca.id",
+        "cap.caretakerAssignmentId"
+      )
+      .leftJoin("permission as p", "cap.permissionId", "p.id")
+      .select(
+        "ca.*",
+        "c.id as caretaker_id",
+        "c.name as caretaker_name",
+        "c.email as caretaker_email",
+        "c.phone as caretaker_phone",
+        "cr.slug as caretaker_role",
+        "p.id as permission_id",
+        "p.key as permission_key",
+        "p.description as permission_description"
+      );
+
+    // Group caretakers and permissions
+    const groupedCaretakers = [];
+    const caretakerMap = {};
+
+    caretakers.forEach((row) => {
+      if (!caretakerMap[row.id]) {
+        caretakerMap[row.id] = {
+          id: row.id,
+          houseId: row.houseId,
+          caretakerId: row.caretakerId,
+          expiresAt: row.expiresAt,
+          createdAt: row.createdAt,
+          caretaker: {
+            id: row.caretaker_id,
+            name: row.caretaker_name,
+            email: row.caretaker_email,
+            phone: row.caretaker_phone,
+            role: row.caretaker_role,
+          },
+          permissions: [],
+        };
+        groupedCaretakers.push(caretakerMap[row.id]);
+      }
+
+      if (row.permission_id) {
+        caretakerMap[row.id].permissions.push({
+          id: row.permission_id,
+          key: row.permission_key,
+          description: row.permission_description,
+        });
+      }
+    });
+
+    // Get recent notices
+    const notices = await db("notice")
+      .where("houseId", id)
+      .orderBy("createdAt", "desc")
+      .limit(5);
+
+    // Get detailed renters if requested
+    let detailedRenters = [];
+    if (withRenters === 'true' || withRenters === true) {
+      detailedRenters = await db("renter as r")
+        .whereIn("r.id", db("flat").where("house_id", id).select("renter_id").whereNotNull("renter_id"))
+        .select(
+          "r.*",
+          db.raw("(SELECT GROUP_CONCAT(f.number) FROM flat f WHERE f.renter_id = r.id AND f.house_id = ?) as flat_numbers", [id])
+        )
+        .orderBy("r.name", "asc");
+    }
+
+    // Calculate statistics
+    const occupiedFlats = formattedFlats.filter(f => f.renter).length;
+    const vacantFlats = formattedFlats.length - occupiedFlats;
+    const uniqueRenters = new Set(formattedFlats.filter(f => f.renter).map(f => f.renter.id)).size;
+
+    const formattedHouse = {
+      ...house,
+      owner: {
+        id: house.ownerId,
+        name: house.owner_name,
+        email: house.owner_email,
+        phone: house.owner_phone,
+        role: {
+          slug: house.owner_role_slug,
+        },
+      },
+      statistics: {
+        totalFlats: formattedFlats.length,
+        occupiedFlats,
+        vacantFlats,
+        totalRenters: uniqueRenters,
+        totalCaretakers: groupedCaretakers.length,
+        totalNotices: notices.length,
+        paymentStats: {
+          totalCollected: parseFloat(paymentStats?.total_collected || 0),
+          totalPending: parseFloat(paymentStats?.total_pending || 0),
+          totalOverdue: parseFloat(paymentStats?.total_overdue || 0),
+          paidCount: parseInt(paymentStats?.paid_count || 0),
+          pendingCount: parseInt(paymentStats?.pending_count || 0),
+          overdueCount: parseInt(paymentStats?.overdue_count || 0),
+        }
+      },
+      flats: formattedFlats,
+      caretakers: groupedCaretakers,
+      notices: notices.map((n) => ({
+        ...n,
+        metadata: n.metadata ? JSON.parse(n.metadata) : {},
+      })),
+    };
+
+    // Add detailed renters if requested
+    if (withRenters && detailedRenters.length > 0) {
+      formattedHouse.detailedRenters = detailedRenters.map(r => ({
+        ...r,
+        metadata: r.metadata ? JSON.parse(r.metadata) : {},
+      }));
+    }
+
+    // Remove joined fields
+    delete formattedHouse.ownerId;
+    delete formattedHouse.owner_name;
+    delete formattedHouse.owner_email;
+    delete formattedHouse.owner_phone;
+    delete formattedHouse.owner_role_slug;
+
+    res.json({
+      success: true,
+      data: formattedHouse,
+    });
+  } catch (error) {
+    console.error("Get house details error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch house details",
+    });
   }
+}
 
   // Get house statistics
   async getHouseStats(req, res) {
@@ -1057,6 +1381,7 @@ class HouseController {
             totalFlatsResult,
             totalCaretakersResult,
             recentHouses,
+            rentersData
         ] = await Promise.all([
             houseQuery.clone().count("* as count"),
             db("flat")
@@ -1081,11 +1406,40 @@ class HouseController {
                 )
                 .orderBy("house.createdAt", "desc")
                 .limit(5),
-        ]);
+                db("flat as f")
+                .whereIn("f.house_id", allowedHouseIds)
+                .whereNotNull("f.renter_id")
+                .innerJoin("renter as r", "f.renter_id", "r.id")
+                .select(
+                  "f.house_id",
+                  "r.id as renter_id",
+                  "r.name as renter_name",
+                  "r.phone as renter_phone",
+                  "r.email as renter_email",
+                  "r.status as renter_status",
+                  "f.number as flat_number",
+                  "f.name as flat_name"
+                )
+                .orderBy("r.name", "asc"),
+                ]);
 
         const totalHouses = parseInt(totalHousesResult[0]?.count || 0);
         const totalFlats = parseInt(totalFlatsResult[0]?.count || 0);
         const totalCaretakers = parseInt(totalCaretakersResult[0]?.count || 0);
+        const houseRentersMap = rentersData.reduce((acc, row) => {
+          if (!acc[row.house_id]) {
+            acc[row.house_id] = [];
+          }
+          acc[row.house_id].push({
+            id: row.renter_id,
+            name: row.renter_name,
+            phone: row.renter_phone,
+            email: row.renter_email,
+            status: row.renter_status,
+            flat: row.flat_number ? `Flat ${row.flat_number}` : row.flat_name,
+          });
+          return acc;
+        }, {});
 
         // Get houses by month for chart (last 6 months)
         const sixMonthsAgo = new Date();
@@ -1105,6 +1459,7 @@ class HouseController {
                 totalHouses,
                 totalFlats,
                 totalCaretakers,
+                totalRenters: rentersData.length,
                 recentHouses: recentHouses.map((h) => ({
                     ...h,
                     metadata: h.metadata ? JSON.parse(h.metadata) : {},
@@ -1113,6 +1468,7 @@ class HouseController {
                         name: h.owner_name,
                         email: h.owner_email,
                     },
+                    renters: houseRentersMap[h.id] || [],
                 })),
                 housesByMonth: housesByMonth.map((item) => ({
                     month: item.month,
