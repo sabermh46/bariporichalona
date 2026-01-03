@@ -30,10 +30,6 @@ class RenterController {
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             
-            console.log('Creating renter - User:', { userId, userRole });
-            console.log('Request body:', req.body);
-            console.log('Files:', req.files);
-            
             // Validate required fields
             if (!name) {
                 return res.status(400).json({

@@ -143,6 +143,22 @@ async generateRegistrationToken(creatorId, options = {}) {
     throw new Error(`You cannot create ${roleSlug} accounts`);
   }
 
+  if(roleSlug === 'caretaker') {
+    if(!metaData.house_owner_id){
+      throw new Error("metaData must include house_owner_id for caretaker registration tokens");
+    }
+
+    const houseOwner = await db('user')
+      .where( 'user.id', metaData.house_owner_id ) 
+      .leftJoin('role', 'user.roleId', 'role.id')
+      .select('user.*', 'role.slug as role_slug')
+      .first()
+
+      if(!houseOwner || houseOwner.role_slug !== 'house_owner'){
+        throw new Error("Invalid house_owner in metadata");
+      }
+  }
+
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
 
@@ -155,7 +171,9 @@ async generateRegistrationToken(creatorId, options = {}) {
     metadata: JSON.stringify({
       ...metaData,
       createdByEmail: creator.email,
-      createdByName: creator.name
+      createdByName: creator.name,
+      house_owner_id: metaData.house_owner_id || null,
+      house_ids: metaData.house_ids || null
     }),
     createdAt: new Date()
   });
@@ -289,11 +307,26 @@ async generateRegistrationToken(creatorId, options = {}) {
     let roleSlug = await this.getSettings("registration.default_role", "caretaker");
     let tokenData = null;
     let createdBy = null;
+    let tokenMetaData = {};
 
     if (requestToken) {
       tokenData = await this.validateRegistrationToken(requestToken);
       roleSlug = tokenData.roleSlug;
       createdBy = tokenData.createdBy;
+
+      if (tokenData.metadata) {
+        if (typeof tokenData.metadata === 'string') {
+          try {
+            tokenMetaData = JSON.parse(tokenData.metadata);
+          } catch (err) {
+            console.error('Error parsing token metadata:', err);
+            tokenMetaData = {};
+          }
+        } else if (typeof tokenData.metadata === 'object' && tokenData.metadata !== null) {
+          // Already an object, use it directly
+          tokenMetaData = tokenData.metadata;
+        }
+      }
 
       await db('registrationtoken')
         .where({ id: tokenData.id })
@@ -341,6 +374,56 @@ async generateRegistrationToken(creatorId, options = {}) {
           .update({
             usedBy: userId
           });
+
+          if(roleSlug === 'caretaker' && tokenMetaData.house_owner_id) {
+            const houseOwnerId = tokenMetaData.house_owner_id;
+            const houseIds = tokenMetaData.house_ids || [];
+
+            let houses = [];
+            if (houseIds.length > 0) {
+              houses = await trx('house')
+                .whereIn('id', houseIds)
+                .andWhere({ ownerId: houseOwnerId })
+                .select('id');
+            } else {
+              houses = await trx('house')
+                .where({ ownerId: houseOwnerId })
+                .select('id');
+            }
+
+            for (const house of houses) {
+              const [assignmentId] = await trx('caretakerassignment').insert({
+                uuid: uuidv4(),
+                houseId: house.id,
+                caretakerId: userId,
+                createdBy: houseOwnerId,
+                createdAt: new Date(),
+                expiresAt: null // No expiration by default
+              });
+              
+              // If default permissions are specified in metadata, add them
+              if (tokenMetaData.default_permissions && Array.isArray(tokenMetaData.default_permissions)) {
+                for (const permissionKey of tokenMetaData.default_permissions) {
+                  const permission = await trx('permission')
+                    .where({ key: permissionKey })
+                    .first();
+                  
+                  if (permission) {
+                    await trx('caretakerassignmentpermission').insert({
+                      caretakerAssignmentId: assignmentId,
+                      permissionId: permission.id,
+                      grantedBy: houseOwnerId,
+                      grantedAt: new Date()
+                    });
+                  }
+                }
+              }
+            }
+
+          }
+
+          
+
       }
 
       const user = await trx('user')

@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/auth.middleware');
 const HouseController = require('../controllers/house.controller');
 const PermissionService = require('../services/permission.service');
 const db = require('../config/knex');
+const { checkHouseAccess } = require('../middleware/caretakerPermission.middleware');
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
@@ -35,7 +36,7 @@ router.get('/stats', async (req, res, next) => {
 });
 
 // Get single house details
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', checkHouseAccess(), async (req, res, next) => {
     try {
         await HouseController.getHouseDetails(req, res);
     } catch (error) {
@@ -44,7 +45,7 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // Update house
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', checkHouseAccess(), async (req, res, next) => {
     try {
         // Check permission for update
         const { id } = req.params;

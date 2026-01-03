@@ -5,6 +5,7 @@ const FlatController = require('../controllers/flat.controller');
 const FinancialController = require('../controllers/finantial.controller');
 const authMiddleware = require('../middleware/auth.middleware');
 const roleMiddleware = require('../middleware/role.middleware');
+const { checkHouseAccess, checkCaretakerHousePermission } = require('../middleware/caretakerPermission.middleware');
 
 // Flat Management Routes
 router.get('/houses/:houseId/flats',
@@ -15,7 +16,9 @@ router.get('/houses/:houseId/flats',
 
 router.post('/houses/:houseId/flats',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+    checkHouseAccess(),
+    checkCaretakerHousePermission('flats.create'),
     FlatController.createFlat
 );
 
@@ -90,11 +93,11 @@ router.get('/flats/:id/payments',
     }
 );
 
-router.post('/flats/:id/payments',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
-    FinancialController.recordRentPayment
-);
+// router.post('/flats/:id/payments',
+//     authMiddleware,
+//     roleMiddleware(['house_owner', 'staff', 'web_owner']),
+//     FinancialController.recordRentPayment
+// );
 
 // Flat-specific financial routes
 router.get('/flats/:id/financial-summary',

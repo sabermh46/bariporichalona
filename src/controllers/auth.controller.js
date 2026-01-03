@@ -75,6 +75,40 @@ class AuthController {
     try {
       const { email, roleSlug, expiresInHours, metadata } = req.body;
 
+      
+
+      let parsedMetadata = {};
+      if (metadata) {
+        if (typeof metadata === 'string') {
+          try {
+            parsedMetadata = JSON.parse(metadata);
+          } catch (err) {
+            parsedMetadata = {};
+          }
+        } else if (typeof metadata === 'object') {
+          parsedMetadata = metadata;
+        }
+      }
+
+      if (roleSlug === 'caretaker' && req.user.role.slug === 'house_owner') {
+        parsedMetadata.house_owner_id = req.user.id;
+        
+        // Optionally allow specifying house IDs
+        if (parsedMetadata.house_ids && Array.isArray(parsedMetadata.house_ids)) {
+          // Verify these houses belong to the house owner
+          const houses = await db('house')
+            .whereIn('id', parsedMetadata.house_ids)
+            .andWhere('ownerId', req.user.id)
+            .select('id');
+          
+          if (houses.length !== parsedMetadata.house_ids.length) {
+            throw new Error('Some houses do not belong to you');
+          }
+        }
+      }
+
+      
+
       if(req.user.role.slug === 'staff' ) {
         if(roleSlug && (roleSlug !== 'house_owner' && roleSlug !== 'caretaker')) {
           throw new Error("Staff can only generate tokens for House_Owner Or Caretaker role");
@@ -83,13 +117,16 @@ class AuthController {
         if(!hasThisPermission) {
           throw new Error("You do not have permission to generate registration tokens");
         }
+        if (roleSlug === 'caretaker' && !parsedMetadata.house_owner_id) {
+          throw new Error("house_owner_id is required in metadata when staff generates caretaker token");
+        }
       }
       
       const result = await AuthService.generateRegistrationToken(req.user.id, {
         email,
         roleSlug: roleSlug || 'house_owner',
         expiresInHours: expiresInHours || 24,
-        metadata: metadata || {}
+        metaData: parsedMetadata || {}
       });
 
       res.json(serializeBigInt(result));

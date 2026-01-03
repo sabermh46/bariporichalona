@@ -20,9 +20,14 @@ CREATE TABLE `caretakerassignmentpermission` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `caretakerAssignmentId` BIGINT NOT NULL,
     `permissionId` BIGINT NOT NULL,
-    `assignedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `grantedBy` BIGINT NOT NULL,
+    `grantedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `revokedAt` DATETIME(3) NULL,
+    `revokedBy` BIGINT NULL,
 
     INDEX `CaretakerAssignmentPermission_permissionId_fkey`(`permissionId`),
+    INDEX `CaretakerAssignmentPermission_grantedBy_fkey`(`grantedBy`),
+    INDEX `CaretakerAssignmentPermission_revokedBy_fkey`(`revokedBy`),
     UNIQUE INDEX `CaretakerAssignmentPermission_caretakerAssignmentId_permissi_key`(`caretakerAssignmentId`, `permissionId`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -58,6 +63,9 @@ CREATE TABLE `rent_payment` (
     `status` ENUM('pending', 'paid', 'overdue', 'partial', 'cancelled') NULL DEFAULT 'pending',
     `late_fee_amount` DECIMAL(10, 2) NULL DEFAULT 0.00,
     `notes` TEXT NULL,
+    `base_amount` DECIMAL(10, 2) NULL,
+    `amenities_charge` DECIMAL(10, 2) NULL,
+    `metadata` LONGTEXT NULL,
     `created_by` BIGINT NULL,
     `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
     `updated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
@@ -498,6 +506,12 @@ ALTER TABLE `caretakerassignmentpermission` ADD CONSTRAINT `CaretakerAssignmentP
 
 -- AddForeignKey
 ALTER TABLE `caretakerassignmentpermission` ADD CONSTRAINT `CaretakerAssignmentPermission_permissionId_fkey` FOREIGN KEY (`permissionId`) REFERENCES `permission`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `caretakerassignmentpermission` ADD CONSTRAINT `CaretakerAssignmentPermission_grantedBy_fkey` FOREIGN KEY (`grantedBy`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `caretakerassignmentpermission` ADD CONSTRAINT `CaretakerAssignmentPermission_revokedBy_fkey` FOREIGN KEY (`revokedBy`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `device` ADD CONSTRAINT `Device_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;

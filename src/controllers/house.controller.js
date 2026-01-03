@@ -2,8 +2,53 @@ const { v4: uuid } = require("uuid");
 const db = require("../config/knex");
 const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
+const CaretakerPermissionService = require("../services/CaretakerPermission.service");
 
 class HouseController {
+
+  constructor() {
+    this.canAccessHouse = this.canAccessHouse.bind(this);
+    this.createHouse = this.createHouse.bind(this);
+    this.getHouses = this.getHouses.bind(this);
+    this.updateHouse = this.updateHouse.bind(this);
+    this.deleteHouse = this.deleteHouse.bind(this);
+    this.assignRenterToFlat = this.assignRenterToFlat.bind(this);
+    this.removeRenterFromFlat = this.removeRenterFromFlat.bind(this);
+    this.getFlatWithRenter = this.getFlatWithRenter.bind(this);
+    this.checkUserHierarchy = this.checkUserHierarchy.bind(this);
+    this.getManagedUsers = this.getManagedUsers.bind(this);
+    this.updateHouse = this.updateHouse.bind(this);
+
+  }
+
+
+  async canAccessHouse(user, houseId, permissionKey = null) {
+    const house = await db("house").where("id", houseId).first();
+    
+    if (!house) return false;
+
+    // Check based on user role
+    if (user.role.slug === "web_owner") {
+      return true;
+    } else if (user.role.slug === "house_owner") {
+      // House owner can access their own houses
+      return house.ownerId === user.id;
+    } else if (user.role.slug === "staff") {
+      // Staff can access houses of owners they manage
+      const isManaged = await this.checkUserHierarchy(user.id, house.ownerId);
+      return isManaged;
+    } else if (user.role.slug === "caretaker") {
+      // Check if caretaker is assigned to this house
+      const hasAccess = await CaretakerPermissionService.hasCaretakerPermission(
+        user.id,
+        houseId,
+        permissionKey || 'houses.view.own'
+      );
+      return hasAccess;
+    }
+
+    return false;
+  }
   // Create a new house
   async createHouse(req, res) {
     try {
@@ -374,7 +419,7 @@ class HouseController {
         allowedFields = {
             name: true,
           address: true,
-          flatCount: true,
+          flatCount: false,
           metadata: true,
           active: false,
         };
@@ -395,6 +440,28 @@ class HouseController {
             address: true,
             flatCount: false,
             metadata: false,
+            active: false,
+          };
+        } else if(currentUser.role.slug === "caretaker") {
+          // Caretaker can only update metadata if they have permission for this house
+          const hasPermission = await CaretakerPermissionService.hasCaretakerPermission(
+            currentUser.id,
+            house.id,
+            'houses.edit'
+          );
+
+          if(!hasPermission) {
+            return res.status(403).json({
+              success: false,
+              error: "You do not have permission to update this house",
+            });
+          }
+
+          allowedFields = {
+            name: false,
+            address: false,
+            flatCount: false,
+            metadata: true, // Only metadata
             active: false,
           };
         } else {
@@ -426,6 +493,30 @@ class HouseController {
             };
           }
         }
+      } else if(currentUser.role.slug === "caretaker") {
+        // Caretaker can only update metadata if they have permission for this house
+        canUpdate = CaretakerPermissionService.hasCaretakerPermission(
+          currentUser.id,
+          house.id,
+          'houses.edit'
+        )
+
+        if(!canUpdate) {
+          return res.status(403).json({
+            success: false,
+            error: "You do not have permission to update this house",
+          });
+        }
+
+        allowedFields = {
+          name: false,
+          address: false,
+          flatCount: false,
+          metadata: true,
+          active: false,
+        };
+
+
       } else {
         return res.status(403).json({
           success: false,
@@ -679,8 +770,29 @@ class HouseController {
 
       // Apply filters based on user role
       if (currentUser.role.slug === "house_owner") {
-        // House owner can only see their own houses
+        // House owner and caretaker can only see their own houses
         query = query.where("h.ownerId", currentUser.id);
+      } else if( currentUser.role.slug === "caretaker") {
+        
+        const accessibleHouseIds = await CaretakerPermissionService.getCaretakerHouses(currentUser.id);
+          
+          
+        if(accessibleHouseIds.length === 0) {
+          return res.json({
+            success: true,
+            data: [],
+            tpagination: {
+              total: 0,
+              page: pageNum,
+              limit: limitNum,
+              pages: 0
+            }
+          });
+        }
+        
+
+        query = query.whereIn("h.id", accessibleHouseIds);
+
       } else if (currentUser.role.slug === "staff") {
         // Staff can see houses of owners they manage
         const hasPermission = await PermissionService.hasPermission(
@@ -888,205 +1000,6 @@ class HouseController {
     }
   }
 
-  // Get single house details
-  // async getHouseDetails(req, res) {
-  //   try {
-  //     const { id } = req.params;
-
-  //     const house = await db("house as h")
-  //       .where("h.id", id)
-  //       .leftJoin("user as u", "h.ownerId", "u.id")
-  //       .leftJoin("role as r", "u.roleId", "r.id")
-  //       .select(
-  //         "h.*",
-  //         "u.id as owner_id",
-  //         "u.name as owner_name",
-  //         "u.email as owner_email",
-  //         "u.phone as owner_phone",
-  //         "r.slug as owner_role_slug"
-  //       )
-  //       .first();
-
-  //     if (!house) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: "House not found",
-  //       });
-  //     }
-
-  //     // Parse metadata
-  //     house.metadata = house.metadata ? JSON.parse(house.metadata) : {};
-  //     house.active = Boolean(house.active);
-
-  //     // Check access permissions
-  //     const hasAccess = await this.checkHouseAccess(req.user, house.id);
-  //     if (!hasAccess) {
-  //       return res.status(403).json({
-  //         success: false,
-  //         error: "You do not have permission to view this house",
-  //       });
-  //     }
-
-  //     // Get flats with renter (CORRECTED JOIN)
-  //     const flats = await db("flat as f")
-  //       .where("f.house_id", id)
-  //       .leftJoin("renter as ren", "f.renter_id", "ren.id")
-  //       .select(
-  //         "f.*",
-  //         "ren.id as renter_id",
-  //         "ren.name as renter_name",
-  //         "ren.phone as renter_phone",
-  //         "ren.status as renter_status",
-  //         "ren.alternativePhone as renter_alternative_phone",
-  //         "ren.email as renter_email",
-  //         "ren.nid as renter_nid"
-  //       );
-
-  //     // Format flats - each flat has ONE renter (not array)
-  //     const formattedFlats = flats.map((row) => {
-  //       const flat = {
-  //         id: row.id,
-  //         uuid: row.uuid,
-  //         houseId: row.house_id,
-  //         flatNumber: row.number, // Note: from schema, column is 'number' not 'flatNumber'
-  //         name: row.name,
-  //         metadata: null, //Get house details error: SyntaxError: Unexpected token 'q', "qwert" is not valid JSON
-  //         createdAt: row.createdAt,
-  //         updatedAt: row.updatedAt,
-  //         renter: null,
-  //       };
-
-  //       if (row.metadata) {
-  //         if (typeof row.metadata === 'string') {
-  //           try {
-  //             flat.metadata = JSON.parse(row.metadata);
-  //           } catch (e) {
-  //             // If parsing fails, it's plain text
-  //             console.warn(`Flat ${row.id} has invalid JSON metadata:`, row.metadata);
-  //             flat.metadata = {
-  //               notes: row.metadata,
-  //               isPlainText: true
-  //             };
-  //           }
-  //         } else if (typeof row.metadata === 'object') {
-  //           // Already parsed by knex (if using JSON column type)
-  //           flat.metadata = row.metadata;
-  //         }
-  //       }
-
-  //       // If there's a renterId, include renter details
-  //       if (row.renterId) {
-  //         flat.renter = {
-  //           id: row.renter_id,
-  //           name: row.renter_name,
-  //           phone: row.renter_phone,
-  //           alternativePhone: row.renter_alternative_phone,
-  //           email: row.renter_email,
-  //           nid: row.renter_nid,
-  //           status: row.renter_status,
-  //         };
-  //       }
-
-  //       return flat;
-  //     });
-
-  //     // Get caretakers with permissions
-  //     const caretakers = await db("caretakerassignment as ca")
-  //       .where("ca.houseId", id)
-  //       .leftJoin("user as c", "ca.caretakerId", "c.id")
-  //       .leftJoin(
-  //         "caretakerassignmentpermission as cap",
-  //         "ca.id",
-  //         "cap.caretakerAssignmentId"
-  //       )
-  //       .leftJoin("permission as p", "cap.permissionId", "p.id")
-  //       .select(
-  //         "ca.*",
-  //         "c.id as caretaker_id",
-  //         "c.name as caretaker_name",
-  //         "c.email as caretaker_email",
-  //         "c.phone as caretaker_phone",
-  //         "p.id as permission_id",
-  //         "p.key as permission_key",
-  //         "p.description as permission_description"
-  //       );
-
-  //     // Group caretakers and permissions
-  //     const groupedCaretakers = [];
-  //     const caretakerMap = {};
-
-  //     caretakers.forEach((row) => {
-  //       if (!caretakerMap[row.id]) {
-  //         caretakerMap[row.id] = {
-  //           id: row.id,
-  //           houseId: row.houseId,
-  //           caretakerId: row.caretakerId,
-  //           expiresAt: row.expiresAt,
-  //           createdAt: row.createdAt,
-  //           caretaker: {
-  //             id: row.caretaker_id,
-  //             name: row.caretaker_name,
-  //             email: row.caretaker_email,
-  //             phone: row.caretaker_phone,
-  //           },
-  //           permissions: [],
-  //         };
-  //         groupedCaretakers.push(caretakerMap[row.id]);
-  //       }
-
-  //       if (row.permission_id) {
-  //         caretakerMap[row.id].permissions.push({
-  //           id: row.permission_id,
-  //           key: row.permission_key,
-  //           description: row.permission_description,
-  //         });
-  //       }
-  //     });
-
-  //     // Get recent notices
-  //     const notices = await db("notice")
-  //       .where("houseId", id)
-  //       .orderBy("createdAt", "desc")
-  //       .limit(5);
-
-  //     const formattedHouse = {
-  //       ...house,
-  //       owner: {
-  //         id: house.ownerId,
-  //         name: house.owner_name,
-  //         email: house.owner_email,
-  //         phone: house.owner_phone,
-  //         role: {
-  //           slug: house.owner_role_slug,
-  //         },
-  //       },
-  //       flats: formattedFlats,
-  //       caretakers: groupedCaretakers,
-  //       notices: notices.map((n) => ({
-  //         ...n,
-  //         metadata: n.metadata ? JSON.parse(n.metadata) : {},
-  //       })),
-  //     };
-
-  //     // Remove joined fields
-  //     delete formattedHouse.ownerId;
-  //     delete formattedHouse.owner_name;
-  //     delete formattedHouse.owner_email;
-  //     delete formattedHouse.owner_phone;
-  //     delete formattedHouse.owner_role_slug;
-
-  //     res.json({
-  //       success: true,
-  //       data: formattedHouse,
-  //     });
-  //   } catch (error) {
-  //     console.error("Get house details error:", error);
-  //     res.status(500).json({
-  //       success: false,
-  //       error: "Failed to fetch house details",
-  //     });
-  //   }
-  // }
   async getHouseDetails(req, res) {
   try {
     const { id } = req.params;
@@ -1119,6 +1032,7 @@ class HouseController {
 
     // Check access permissions
     const hasAccess = await this.checkHouseAccess(req.user, house.id);
+    
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -1357,7 +1271,27 @@ class HouseController {
 
         if (currentUser.role.slug === "house_owner") {
             houseQuery = houseQuery.where("ownerId", currentUser.id);
-        } else if (currentUser.role.slug === "staff") {
+        } else if (currentUser.role.slug === "caretaker") {
+        // Caretaker can only see stats for houses they're assigned to
+        const accessibleHouseIds = await CaretakerPermissionService.getCaretakerHouses(currentUser.id);
+        
+        
+        if (accessibleHouseIds.length === 0) {
+          return res.json({
+            success: true,
+            data: {
+              totalHouses: 0,
+              totalFlats: 0,
+              totalCaretakers: 0,
+              totalRenters: 0,
+              recentHouses: [],
+              housesByMonth: [],
+            },
+          });
+        }
+        
+        houseQuery = houseQuery.whereIn("house.id", accessibleHouseIds);
+      } else if (currentUser.role.slug === "staff") {
             
             const hasPermission = await PermissionService.hasPermission(
                 currentUser.id,
@@ -1485,8 +1419,83 @@ class HouseController {
     }
 }
 
+// New method: Get caretaker's assigned houses with permissions
+  async getMyAssignedHouses(req, res) {
+    try {
+      const currentUser = req.user;
+      
+      if (currentUser.role.slug !== 'caretaker') {
+        return res.status(400).json({
+          success: false,
+          error: "This endpoint is only for caretakers",
+        });
+      }
+
+      const houseIds = await CaretakerPermissionService.getCaretakerHouses(currentUser.id);
+      
+      if (houseIds.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+        });
+      }
+
+      // Get house details with permissions for each house
+      const housesWithPermissions = await Promise.all(
+        houseIds.map(async (houseId) => {
+          const house = await db("house as h")
+            .where("h.id", houseId)
+            .leftJoin("user as u", "h.ownerId", "u.id")
+            .select(
+              "h.id",
+              "h.uuid",
+              "h.name",
+              "h.address",
+              "h.flatCount",
+              "h.active",
+              "u.name as owner_name",
+              "u.email as owner_email"
+            )
+            .first();
+
+          if (!house) return null;
+
+          // Get permissions for this house
+          const permissions = await CaretakerPermissionService.getCaretakerHousePermissions(
+            currentUser.id,
+            houseId
+          );
+
+          return {
+            ...house,
+            active: Boolean(house.active),
+            permissions: permissions,
+            owner: {
+              name: house.owner_name,
+              email: house.owner_email,
+            },
+          };
+        })
+      );
+
+      // Filter out null houses
+      const filteredHouses = housesWithPermissions.filter(h => h !== null);
+
+      res.json({
+        success: true,
+        data: serializeBigInt(filteredHouses),
+      });
+    } catch (error) {
+      console.error("Get assigned houses error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch assigned houses",
+      });
+    }
+  }
+
   // Helper: Check house access
-  async checkHouseAccess(user, houseId) {
+  async checkHouseAccess(user, houseId, permissionKey = null) {
     const house = await db("house").where("id", houseId).first();
 
     if (!house) return false;
@@ -1502,6 +1511,16 @@ class HouseController {
     if (user.role.slug === "staff") {
       const isManaged = await this.checkUserHierarchy(user.id, house.ownerId);
       return isManaged;
+    }
+
+    if (user.role.slug === "caretaker") {
+      // Check if caretaker is assigned to this house
+      const hasAccess = await CaretakerPermissionService.hasCaretakerPermission(
+        user.id,
+        houseId,
+        permissionKey || 'houses.view.own'
+      );
+      return hasAccess;
     }
 
     return false;

@@ -27,15 +27,22 @@ model caretakerassignment {
 }
 
 model caretakerassignmentpermission {
-  id                    BigInt              @id @default(autoincrement())
-  caretakerAssignmentId BigInt
-  permissionId          BigInt
-  assignedAt            DateTime            @default(now())
-  caretakerassignment   caretakerassignment @relation(fields: [caretakerAssignmentId], references: [id], map: "CaretakerAssignmentPermission_caretakerAssignmentId_fkey")
-  permission            permission          @relation(fields: [permissionId], references: [id], map: "CaretakerAssignmentPermission_permissionId_fkey")
+  id                                                 BigInt              @id @default(autoincrement())
+  caretakerAssignmentId                              BigInt
+  permissionId                                       BigInt
+  grantedBy                                          BigInt
+  grantedAt                                          DateTime            @default(now())
+  revokedAt                                          DateTime?
+  revokedBy                                          BigInt?
+  caretakerassignment                                caretakerassignment @relation(fields: [caretakerAssignmentId], references: [id], map: "CaretakerAssignmentPermission_caretakerAssignmentId_fkey")
+  permission                                         permission          @relation(fields: [permissionId], references: [id], map: "CaretakerAssignmentPermission_permissionId_fkey")
+  user_caretakerassignmentpermission_grantedByTouser user                @relation("caretakerassignmentpermission_grantedByTouser", fields: [grantedBy], references: [id], map: "CaretakerAssignmentPermission_grantedBy_fkey")
+  user_caretakerassignmentpermission_revokedByTouser user?               @relation("caretakerassignmentpermission_revokedByTouser", fields: [revokedBy], references: [id], map: "CaretakerAssignmentPermission_revokedBy_fkey")
 
   @@unique([caretakerAssignmentId, permissionId], map: "CaretakerAssignmentPermission_caretakerAssignmentId_permissi_key")
   @@index([permissionId], map: "CaretakerAssignmentPermission_permissionId_fkey")
+  @@index([grantedBy], map: "CaretakerAssignmentPermission_grantedBy_fkey")
+  @@index([revokedBy], map: "CaretakerAssignmentPermission_revokedBy_fkey")
 }
 
 model device {
@@ -52,27 +59,30 @@ model device {
 }
 
 model rent_payment {
-  id              BigInt               @id @default(autoincrement())
-  uuid            String?              @unique @db.VarChar(36)
-  flat_id         BigInt
-  renter_id       BigInt
-  house_id        BigInt
-  amount          Decimal              @db.Decimal(10, 2)
-  due_date        DateTime             @db.Date
-  paid_date       DateTime?            @db.Date
-  paid_amount     Decimal?             @db.Decimal(10, 2)
-  payment_method  payment_method_enum?
-  transaction_id  String?              @db.VarChar(100)
-  status          rent_status_enum?    @default(pending)
-  late_fee_amount Decimal?             @default(0.00) @db.Decimal(10, 2)
-  notes           String?              @db.Text
-  created_by      BigInt?
-  created_at      DateTime?            @default(now()) @db.Timestamp(0)
-  updated_at      DateTime?            @default(now()) @db.Timestamp(0)
-  user            user?                @relation(fields: [created_by], references: [id])
-  flat            flat                 @relation(fields: [flat_id], references: [id])
-  house           house                @relation(fields: [house_id], references: [id])
-  renter          renter               @relation(fields: [renter_id], references: [id])
+  id               BigInt               @id @default(autoincrement())
+  uuid             String?              @unique @db.VarChar(36)
+  flat_id          BigInt
+  renter_id        BigInt
+  house_id         BigInt
+  amount           Decimal              @db.Decimal(10, 2)
+  due_date         DateTime             @db.Date
+  paid_date        DateTime?            @db.Date
+  paid_amount      Decimal?             @db.Decimal(10, 2)
+  payment_method   payment_method_enum?
+  transaction_id   String?              @db.VarChar(100)
+  status           rent_status_enum?    @default(pending)
+  late_fee_amount  Decimal?             @default(0.00) @db.Decimal(10, 2)
+  notes            String?              @db.Text
+  base_amount      Decimal?             @db.Decimal(10, 2)
+  amenities_charge Decimal?             @db.Decimal(10, 2)
+  metadata         String?              @db.LongText
+  created_by       BigInt?
+  created_at       DateTime?            @default(now()) @db.Timestamp(0)
+  updated_at       DateTime?            @default(now()) @db.Timestamp(0)
+  user             user?                @relation(fields: [created_by], references: [id])
+  flat             flat                 @relation(fields: [flat_id], references: [id])
+  house            house                @relation(fields: [house_id], references: [id])
+  renter           renter               @relation(fields: [renter_id], references: [id])
 
   @@index([due_date, status], map: "idx_rent_payment_due_date")
   @@index([flat_id, status], map: "idx_rent_payment_flat_id")
@@ -474,6 +484,9 @@ model user {
   role                                                      role?                 @relation(fields: [roleId], references: [id], map: "User_roleId_fkey")
   userloginas_userloginas_targetUserIdTouser                userloginas[]         @relation("userloginas_targetUserIdTouser")
   userloginas_userloginas_userIdTouser                      userloginas[]         @relation("userloginas_userIdTouser")
+
+  caretakerassignmentpermission_caretakerassignmentpermission_grantedByTouser caretakerassignmentpermission[] @relation("caretakerassignmentpermission_grantedByTouser")
+  caretakerassignmentpermission_caretakerassignmentpermission_revokedByTouser caretakerassignmentpermission[] @relation("caretakerassignmentpermission_revokedByTouser")
 
   @@index([email], map: "User_email_idx")
   @@index([parentId], map: "User_parentId_fkey")

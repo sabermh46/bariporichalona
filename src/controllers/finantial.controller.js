@@ -2,6 +2,9 @@
 const db = require('../config/knex');
 const { v4: uuidv4 } = require('uuid');
 const NotificationService = require('../services/emailSmsNotification.service');
+const CaretakerPermissionService = require('../services/CaretakerPermission.service');
+const HouseController = require('./house.controller');
+const permissionService = require('../services/permission.service');
 
 class FinancialController {
 
@@ -16,169 +19,335 @@ class FinancialController {
 
         this.calculateNextDueDate = this.calculateNextDueDate.bind(this);
     }
-    // 1. Record rent payment (manual by house owner)
+    // 1. Record rent payment (manual by house owner + need to ensure that caretaker has permission)
     async recordRentPayment(req, res) {
-        try {
-            const { payment_method, paid_amount, transaction_id, notes, paid_date, calculate_next_payment } = req.body;
-            const userId = req.user.id;
-            const { id: flat_id } = req.params;
+    try {
+        const { 
+            payment_method, 
+            paid_amount,  // This is actually base rent amount from frontend
+            transaction_id, 
+            notes, 
+            paid_date, 
+            calculate_next_payment,
+            amenities = [],
+            base_rent,
+            amenities_total,
+            late_fee
+        } = req.body;
+        
+        const userId = req.user.id;
+        const { id: flat_id } = req.params;
 
-            // Get flat with renter and house info
-            const flat = await db('flat')
-                .join('house', 'flat.house_id', 'house.id')
-                .leftJoin('renter', 'flat.renter_id', 'renter.id')
-                .where('flat.id', flat_id)
-                .select(
-                    'flat.*',
-                    'house.ownerId',
-                    'house.name as houseName',
-                    'renter.name as renterName',
-                    'renter.email as renterEmail',
-                    'renter.phone as renterPhone'
-                )
-                .first();
+        // Get flat with renter and house info
+        const flat = await db('flat')
+            .join('house', 'flat.house_id', 'house.id')
+            .leftJoin('renter', 'flat.renter_id', 'renter.id')
+            .where('flat.id', flat_id)
+            .select(
+                'flat.*',
+                'house.ownerId',
+                'house.name as houseName',
+                'house.metadata as houseMetadata',
+                'renter.name as renterName',
+                'renter.email as renterEmail',
+                'renter.phone as renterPhone',
+                'renter.nid as renterNid'
+            )
+            .first();
 
-            if (!flat) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Flat not found'
-                });
-            }
-
-            // Check permission
-            if (req.user.role.slug !== 'web_owner') {
-                const hasAccess = await this.checkHouseAccess(userId, flat.house_id);
-                if (!hasAccess) {
-                    return res.status(403).json({
-                        success: false,
-                        error: 'You do not have permission to record payments for this house'
-                    });
-                }
-            }
-
-            // Get the current pending rent payment
-            const currentPayment = await db('rent_payment')
-                .where('flat_id', flat_id)
-                .andWhere('status', 'in', ['pending', 'overdue'])
-                .orderBy('due_date', 'asc')
-                .first();
-
-            if (!currentPayment) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'No pending rent payment found for this flat'
-                });
-            }
-
-            const actualPaidDate = paid_date ? new Date(paid_date) : new Date();
-            const paymentAmount = paid_amount || currentPayment.amount;
-            let lateFee = 0;
-
-            // Calculate late fee if payment is late
-            if (actualPaidDate > currentPayment.due_date) {
-                const daysLate = Math.ceil((actualPaidDate - currentPayment.due_date) / (1000 * 60 * 60 * 24));
-                const dailyLateFee = (currentPayment.amount * (flat.late_fee_percentage || 5)) / 100 / 30;
-                lateFee = Math.round(dailyLateFee * daysLate * 100) / 100;
-            }
-
-            const totalAmount = parseFloat(paymentAmount) + parseFloat(lateFee);
-            const status = parseFloat(paymentAmount) >= parseFloat(currentPayment.amount) ? 'paid' : 'partial';
-
-            // Start transaction
-            const trx = await db.transaction();
-
-            try {
-                // Update rent payment record
-                await trx('rent_payment').where('id', currentPayment.id).update({
-                    paid_date: actualPaidDate,
-                    paid_amount: totalAmount,
-                    payment_method,
-                    transaction_id,
-                    late_fee_amount: lateFee,
-                    status,
-                    notes,
-                    updated_at: new Date()
-                });
-
-                // Update flat
-                await trx('flat').where('id', flat_id).update({
-                    last_rent_paid_date: actualPaidDate,
-                    updatedAt: new Date()
-                });
-
-                let nextDueDate = null;
-
-                // Calculate next due date
-                if(String(calculate_next_payment) === 'true') {
-                    nextDueDate = this.calculateNextDueDate(actualPaidDate, flat.should_pay_rent_day);
-
-                    const nextPayment = {
-                        uuid: uuidv4(),
-                        flat_id,
-                        renter_id: flat.renter_id,
-                        house_id: flat.house_id,
-                        amount: flat.rent_amount || 0,
-                        due_date: nextDueDate,
-                        status: 'pending',
-                        created_at: new Date(),
-                        updated_at: new Date()
-                    };
-
-                    await trx('rent_payment').insert(nextPayment);
-
-                    // Update flat with next due date
-                    await trx('flat').where('id', flat_id).update({
-                        rent_due_date: nextDueDate
-                    });
-                    }
-
-                await trx.commit();
-
-                // Send receipt notification
-                if (flat.renterEmail || flat.renterPhone) {
-                    try {
-                        await NotificationService.sendPaymentReceipt({
-                            renterName: flat.renterName,
-                            email: flat.renterEmail,
-                            phone: flat.renterPhone,
-                            amount: totalAmount,
-                            paymentDate: actualPaidDate,
-                            flatNumber: flat.number,
-                            houseName: flat.houseName,
-                            transactionId: transaction_id
-                        });
-                    } catch (notificationError) {
-                        console.error('Failed to send notification:', notificationError);
-                        // Don't fail the payment if notification fails
-                    }
-                }
-
-                return res.json({
-                    success: true,
-                    data: {
-                        paymentId: currentPayment.id,
-                        amount: totalAmount,
-                        lateFee,
-                        status,
-                        nextDueDate
-                    },
-                    message: 'Payment recorded successfully'
-                });
-
-            } catch (error) {
-                await trx.rollback();
-                throw error;
-            }
-
-        } catch (error) {
-            console.error('Record rent payment error:', error);
-            return res.status(500).json({
+        if (!flat) {
+            return res.status(404).json({
                 success: false,
-                error: 'Failed to record payment'
+                error: 'Flat not found'
             });
         }
-    }
 
+        // Parse flat metadata to get current amenities
+        let flatMetadata = {};
+        try {
+            flatMetadata = flat.metadata && typeof flat.metadata === 'string'
+                ? JSON.parse(flat.metadata)
+                : flat.metadata || {};
+        } catch (e) {
+            console.error('Failed to parse flat metadata:', e);
+            flatMetadata = {};
+        }
+
+        // Use provided amenities or fall back to flat metadata amenities
+        let paymentAmenities = [];
+        if (amenities && amenities.length > 0) {
+            // Use amenities from request (customized for this payment)
+            paymentAmenities = amenities.map(amenity => ({
+                name: amenity.name || '',
+                charge: parseFloat(amenity.charge) || 0
+            }));
+        } else if (flatMetadata.amenities && flatMetadata.amenities.length > 0) {
+            // Use flat's default amenities
+            paymentAmenities = flatMetadata.amenities.map(amenity => ({
+                name: amenity.name || '',
+                charge: parseFloat(amenity.charge) || 0
+            }));
+        }
+
+        // Calculate amenities total
+        const amenitiesTotal = paymentAmenities.reduce(
+            (sum, item) => sum + (parseFloat(item.charge) || 0), 
+            0
+        );
+
+        let hasAccess = false;
+
+        const currentUser = req.user;
+        // Check permission
+        if (currentUser.role.slug === "web_owner") {
+            hasAccess = true;
+        } else if (currentUser.role.slug === "house_owner") {
+            // House owner can only record payments for their own houses
+            hasAccess = flat.ownerId === currentUser.id;
+        } else if (currentUser.role.slug === "staff") {
+            // Staff needs payments.create permission
+            const hasPermission = await permissionService.hasPermission(
+                currentUser.id,
+                "payments.create"
+            );
+            hasAccess = hasPermission;
+        } else if (currentUser.role.slug === "caretaker") {
+            // Caretaker needs payments.create permission for this specific house
+            hasAccess = await CaretakerPermissionService.hasCaretakerPermission(
+                currentUser.id,
+                flat.house_id,
+                "payments.create"
+            );
+        }
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                error: "You do not have permission to record payments for this house",
+            });
+        }
+
+        // Get the current pending rent payment
+        const currentPayment = await db('rent_payment')
+            .where('flat_id', flat_id)
+            .andWhere('status', 'in', ['pending', 'overdue'])
+            .orderBy('due_date', 'asc')
+            .first();
+
+        if (!currentPayment) {
+            return res.status(400).json({
+                success: false,
+                error: 'No pending rent payment found for this flat'
+            });
+        }
+
+        const actualPaidDate = paid_date ? new Date(paid_date) : new Date();
+        
+        // Use provided amounts or calculate them
+        // FIXED: Use paid_amount from request body, not undefined paidAmount variable
+        const baseRentAmount = parseFloat(base_rent || paid_amount || currentPayment.base_amount || flat.rent_amount || 0);
+        const calculatedLateFee = parseFloat(late_fee) || 0;
+
+        // If late fee not provided, calculate it
+        let finalLateFee = calculatedLateFee;
+        if (calculatedLateFee === 0 && actualPaidDate > currentPayment.due_date) {
+            const daysLate = Math.ceil((actualPaidDate - currentPayment.due_date) / (1000 * 60 * 60 * 24));
+            const dailyLateFee = (baseRentAmount * (flat.late_fee_percentage || 5)) / 100 / 30;
+            finalLateFee = Math.round(dailyLateFee * daysLate * 100) / 100;
+        }
+
+        // Calculate total
+        const totalAmount = baseRentAmount + amenitiesTotal + finalLateFee;
+        
+        // FIXED: Calculate expected total properly
+        // Get the expected total from the current payment
+        // If the payment has base_amount and amenities_charge fields, sum them
+        // Otherwise, use the amount field which should be the total
+        let expectedTotal = 0;
+        if (currentPayment.base_amount !== null && currentPayment.base_amount !== undefined && 
+            currentPayment.amenities_charge !== null && currentPayment.amenities_charge !== undefined) {
+            // Payment has breakdown
+            expectedTotal = parseFloat(currentPayment.base_amount || 0) + 
+                          parseFloat(currentPayment.amenities_charge || 0);
+        } else {
+            // Payment doesn't have breakdown, use amount field
+            expectedTotal = parseFloat(currentPayment.amount || 0);
+        }
+
+        // FIXED: Better status calculation
+        let status = 'paid';
+        
+        // If paid amount is less than expected total, it's partial
+        if (totalAmount < expectedTotal) {
+            status = 'partial';
+        } 
+        // If paid amount is 0 or negative, mark as pending
+        else if (totalAmount <= 0) {
+            status = 'pending';
+        }
+        // If status was provided in request, use it (but validate)
+        else if (req.body.status && ['pending', 'paid', 'overdue', 'partial', 'cancelled'].includes(req.body.status)) {
+            status = req.body.status;
+        }
+        // If we're recording a payment with full amount, it's paid
+        else {
+            status = 'paid';
+        }
+
+        // Prepare payment metadata
+        const paymentMetadata = {
+            amenities: paymentAmenities,
+            amenitiesTotal: amenitiesTotal,
+            lateFee: finalLateFee,
+            baseRent: baseRentAmount,
+            renterDetails: {
+                name: flat.renterName,
+                nid: flat.renterNid
+            },
+            houseName: flat.houseName,
+            flatNumber: flat.number,
+            paymentType: amenities.length > 0 ? 'customized' : 'standard',
+            statusDetermination: {
+                totalPaid: totalAmount,
+                expectedTotal: expectedTotal,
+                calculationMethod: currentPayment.base_amount !== null ? 'breakdown' : 'simple'
+            }
+        };
+
+        // Start transaction
+        const trx = await db.transaction();
+
+        try {
+            // Update rent payment record
+            await trx('rent_payment').where('id', currentPayment.id).update({
+                paid_date: actualPaidDate,
+                paid_amount: totalAmount,
+                base_amount: baseRentAmount,
+                amenities_charge: amenitiesTotal,
+                payment_method,
+                transaction_id,
+                late_fee_amount: finalLateFee,
+                status: status,
+                notes,
+                metadata: JSON.stringify(paymentMetadata),
+                updated_at: new Date()
+            });
+
+            // Update flat
+            await trx('flat').where('id', flat_id).update({
+                last_rent_paid_date: actualPaidDate,
+                updatedAt: new Date()
+            });
+
+            let nextDueDate = null;
+
+            // Calculate next due date
+            if (String(calculate_next_payment) === 'true') {
+                nextDueDate = this.calculateNextDueDate(actualPaidDate, flat.should_pay_rent_day);
+
+                // Get flat metadata for next payment
+                let nextPaymentAmenities = [];
+                if (flatMetadata.amenities && flatMetadata.amenities.length > 0) {
+                    // Use flat's default amenities for next payment
+                    nextPaymentAmenities = flatMetadata.amenities.map(amenity => ({
+                        name: amenity.name || '',
+                        charge: parseFloat(amenity.charge) || 0
+                    }));
+                }
+
+                const nextAmenitiesTotal = nextPaymentAmenities.reduce(
+                    (sum, item) => sum + (parseFloat(item.charge) || 0), 
+                    0
+                );
+
+                const nextPaymentTotal = baseRentAmount + nextAmenitiesTotal;
+
+                const nextPayment = {
+                    uuid: uuidv4(),
+                    flat_id,
+                    renter_id: flat.renter_id,
+                    house_id: flat.house_id,
+                    amount: nextPaymentTotal, // Store total amount
+                    base_amount: baseRentAmount,
+                    amenities_charge: nextAmenitiesTotal,
+                    metadata: JSON.stringify({
+                        amenities: nextPaymentAmenities,
+                        breakdown: {
+                            base_rent: baseRentAmount,
+                            amenities_charge: nextAmenitiesTotal,
+                            total: nextPaymentTotal
+                        }
+                    }),
+                    due_date: nextDueDate,
+                    status: 'pending',
+                    created_at: new Date(),
+                    updated_at: new Date()
+                };
+
+                await trx('rent_payment').insert(nextPayment);
+
+                // Update flat with next due date
+                await trx('flat').where('id', flat_id).update({
+                    rent_due_date: nextDueDate
+                });
+            }
+
+            await trx.commit();
+
+            // Send receipt notification
+            if (flat.renterEmail || flat.renterPhone) {
+                try {
+                    await NotificationService.sendPaymentReceipt({
+                        renterName: flat.renterName,
+                        email: flat.renterEmail,
+                        phone: flat.renterPhone,
+                        amount: totalAmount,
+                        paymentDate: actualPaidDate,
+                        flatNumber: flat.number,
+                        houseName: flat.houseName,
+                        transactionId: transaction_id,
+                        breakdown: {
+                            baseRent: baseRentAmount,
+                            amenities: amenitiesTotal,
+                            lateFee: finalLateFee
+                        },
+                        status: status
+                    });
+                } catch (notificationError) {
+                    console.error('Failed to send notification:', notificationError);
+                    // Don't fail the payment if notification fails
+                }
+            }
+
+            return res.json({
+                success: true,
+                data: {
+                    paymentId: currentPayment.id,
+                    baseRent: baseRentAmount,
+                    amenitiesTotal,
+                    lateFee: finalLateFee,
+                    totalAmount,
+                    expectedTotal,
+                    status,
+                    nextDueDate,
+                    metadata: paymentMetadata
+                },
+                message: 'Payment recorded successfully'
+            });
+
+        } catch (error) {
+            await trx.rollback();
+            throw error;
+        }
+
+    } catch (error) {
+        console.error('Record rent payment error:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to record payment'
+        });
+    }
+}
     // 2. Generate monthly rent invoices
     async generateRentInvoices(req, res) {
         try {
@@ -371,7 +540,7 @@ class FinancialController {
         }
     }
 
-    // 4. Record app fee payment
+    // 4. Record app fee payment (A house owner pays app fee to web owner [this platform])
     async recordAppFeePayment(req, res) {
         try {
             const { house_owner_id, house_id, amount, fee_type, due_date, payment_method, transaction_id } = req.body;
@@ -645,22 +814,48 @@ class FinancialController {
         }
     }
 
-    // Helper methods
+    // Helper methods [maybe this need to update with your latest code ]
     async checkHouseAccess(userId, houseId) {
-        const result = await db('house')
-            .leftJoin('caretakerassignment', function() {
-                this.on('house.id', '=', 'caretakerassignment.houseId')
-                    .andOnVal('caretakerassignment.expiresAt', '>', new Date());
-            })
-            .where('house.id', houseId)
-            .andWhere(function() {
-                this.where('house.ownerId', userId)
-                    .orWhere('caretakerassignment.caretakerId', userId);
-            })
-            .select('house.id')
+        try {
+            const user = await db('user as u')
+            .where('u.id', userId)
+            .leftJoin('role as r', 'u.roleId', 'r.id')
+            .select('u.*', 'r.slug as role_slug')
             .first();
+            
+            if (!user) return false;
 
-        return !!result;
+            if (user.role_slug === 'web_owner') {
+            return true;
+            }
+
+            if (user.role_slug === 'house_owner') {
+            const house = await db('house')
+                .where('id', houseId)
+                .andWhere('ownerId', userId)
+                .first();
+            return !!house;
+            }
+
+            if (user.role_slug === 'staff') {
+            // Check if staff manages this house owner
+            const house = await db('house').where('id', houseId).first();
+            if (!house) return false;
+            
+            return await HouseController.checkUserHierarchy(userId, house.ownerId);
+            }
+
+            if (user.role_slug === 'caretaker') {
+
+            const accessibleHouses = await CaretakerPermissionService.getCaretakerHouses(userId);
+            return accessibleHouses.includes(parseInt(houseId));
+            }
+
+            return false;
+        } catch (error) {
+            console.error('Error in checkHouseAccess:', error);
+            return false;
+        }
     }
 
     calculateNextDueDate(currentDate, dayOfMonth) {

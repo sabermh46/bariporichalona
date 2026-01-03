@@ -4,47 +4,50 @@ const { v4: uuidv4 } = require("uuid");
 const { hasPermission } = require("../services/permission.service");
 
 class FlatController {
-
-    constructor() {
-            this.updateFlat = this.updateFlat.bind(this);
-            this.deleteFlat = this.deleteFlat.bind(this);
-            this.assignRenter = this.assignRenter.bind(this);
-            this.removeRenter = this.removeRenter.bind(this);
-            this.checkFlatAccess = this.checkFlatAccess.bind(this);
-            this.getFlatDetails = this.getFlatDetails.bind(this);
-        }
+  constructor() {
+    this.updateFlat = this.updateFlat.bind(this);
+    this.deleteFlat = this.deleteFlat.bind(this);
+    this.assignRenter = this.assignRenter.bind(this);
+    this.removeRenter = this.removeRenter.bind(this);
+    this.checkFlatAccess = this.checkFlatAccess.bind(this);
+    this.getFlatDetails = this.getFlatDetails.bind(this);
+  }
   // 1. Create flat (with flatCount limit check)
   async createFlat(req, res) {
     try {
-      const { number, name, rent_amount, should_pay_rent_day, late_fee_percentage, metadata } = req.body;
+      const {
+        number,
+        name,
+        rent_amount,
+        should_pay_rent_day,
+        late_fee_percentage,
+        metadata,
+      } = req.body;
       const userId = req.user.id;
       const { houseId } = req.params; // From URL params
 
-      console.log("House ID from params:", houseId);
-      console.log("Request body:", req.body);
-      console.log("User ID:", userId);
-      console.log("User role:", req.user.role?.slug);
-
       let metadataToStore = null;
-      if(metadata) {
-        if(typeof metadata === "string") {
-            try {
-                JSON.parse(metadata);
-                metadataToStore = metadata;
-            } catch (error) {
-                metadataToStore = JSON.stringify({ notes: metadata, createdBy: userId, createdAt: new Date().toISOString() });
-            }
-        } else if (typeof metadata === 'object') {
-            // Already an object, stringify it
+      if (metadata) {
+        if (typeof metadata === "string") {
+          try {
+            JSON.parse(metadata);
+            metadataToStore = metadata;
+          } catch (error) {
             metadataToStore = JSON.stringify({
+              notes: metadata,
+              createdBy: userId,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        } else if (typeof metadata === "object") {
+          // Already an object, stringify it
+          metadataToStore = JSON.stringify({
             ...metadata,
             createdBy: req.user.id,
-            createdAt: new Date().toISOString()
-            });
+            createdAt: new Date().toISOString(),
+          });
         }
       }
-
-
 
       // For web_owner, allow without further checks
       if (req.user.role.slug === "web_owner") {
@@ -178,12 +181,6 @@ class FlatController {
         .count("id as count")
         .first();
 
-      console.log(
-        "Current flat count:",
-        currentFlatCount.count,
-        "Max allowed:",
-        house.flatCount
-      );
 
       if (parseInt(currentFlatCount.count) >= parseInt(house.flatCount)) {
         return res.status(400).json({
@@ -219,12 +216,12 @@ class FlatController {
         should_pay_rent_day: should_pay_rent_day ?? 10,
         createdAt: new Date(),
         updatedAt: new Date(),
-      }; 
+      };
 
       const [flatId] = await db("flat").insert(flatData);
-      
+
       // Update house flat count
-    //   await db("house").where("id", houseId).increment("flatCount", 1);
+      //   await db("house").where("id", houseId).increment("flatCount", 1);
 
       return res.status(201).json({
         success: true,
@@ -245,7 +242,7 @@ class FlatController {
   // 2. Get flats with filters (vacant/occupied, houseId)
   async getFlats(req, res) {
     try {
-        const { houseId: house_id } = req.params;
+      const { houseId: house_id } = req.params;
       const { status, search, page = 1, limit = 20 } = req.query;
       const userId = req.user.id;
       const offset = (page - 1) * limit;
@@ -268,14 +265,13 @@ class FlatController {
       // Apply permission filter - owner or caretaker
       if (req.user.role.slug !== "web_owner") {
         query.where(function () {
-          this.where("house.ownerId", userId)
-            .orWhereExists(function () {
-              this.select("*")
-                .from("caretakerassignment")
-                .whereRaw("caretakerassignment.houseId = house.id")
-                .andWhere("caretakerassignment.caretakerId", userId)
-                .andWhere("caretakerassignment.expiresAt", ">", new Date())
-            });
+          this.where("house.ownerId", userId).orWhereExists(function () {
+            this.select("*")
+              .from("caretakerassignment")
+              .whereRaw("caretakerassignment.houseId = house.id")
+              .andWhere("caretakerassignment.caretakerId", userId)
+              .andWhere("caretakerassignment.expiresAt", ">", new Date());
+          });
         });
       }
 
@@ -362,14 +358,11 @@ class FlatController {
           "house.address as houseAddress",
           "house.ownerId",
           "renter.name as renterName",
-        "renter.phone as renterPhone",
-        "renter.email as renterEmail",
-        "renter.id as renterId"
+          "renter.phone as renterPhone",
+          "renter.email as renterEmail",
+          "renter.id as renterId"
         )
         .first();
-
-        console.log(flat);
-        
 
       if (!flat) {
         return res.status(404).json({
@@ -435,27 +428,27 @@ class FlatController {
       const userId = req.user.id;
       const updates = req.body;
 
-        // If metadata is being updated
-        if (updates.metadata) {
-        if (typeof updates.metadata === 'string') {
-            try {
+      // If metadata is being updated
+      if (updates.metadata) {
+        if (typeof updates.metadata === "string") {
+          try {
             // Try to parse if it's JSON
             JSON.parse(updates.metadata);
             // If it's valid JSON, keep it as is
-            } catch (e) {
+          } catch (e) {
             // If it's plain text, wrap it
             updates.metadata = JSON.stringify({
-                notes: updates.metadata,
-                updatedBy: userId,
-                updatedAt: new Date().toISOString()
+              notes: updates.metadata,
+              updatedBy: userId,
+              updatedAt: new Date().toISOString(),
             });
-            }
-        } else if (typeof updates.metadata === 'object') {
-            updates.metadata = JSON.stringify(updates.metadata);
+          }
+        } else if (typeof updates.metadata === "object") {
+          updates.metadata = JSON.stringify(updates.metadata);
         }
-        }
+      }
 
-        updates.updatedAt = new Date();
+      updates.updatedAt = new Date();
 
       // Get flat with house info
       const flat = await db("flat")
@@ -513,66 +506,88 @@ class FlatController {
     }
   }
 
-  // 5. Delete flat (only if no active renter)
-  async deleteFlat(req, res) {
+    async deleteFlat(req, res) {
     try {
       const { id } = req.params;
       const userId = req.user.id;
 
-      // Get flat with house info
-      const flat = await db("flat")
-        .join("house", "flat.house_id", "house.id")
-        .where("flat.id", id)
-        .select("flat.*", "house.ownerId")
-        .first();
+      // Start a transaction to ensure data consistency
+      const trx = await db.transaction();
 
-      if (!flat) {
-        return res.status(404).json({
-          success: false,
-          error: "Flat not found",
-        });
-      }
+      try {
+        // Get flat with house info within transaction
+        const flat = await trx("flat")
+          .join("house", "flat.house_id", "house.id")
+          .where("flat.id", id)
+          .select("flat.*", "house.ownerId")
+          .first();
 
-      // Check permission
-      if (req.user.role.slug !== "web_owner") {
-        const ownerId = flat.ownerId || flat.owner_id;
-        if (ownerId !== userId) {
-          return res.status(403).json({
+        if (!flat) {
+          await trx.rollback();
+          return res.status(404).json({
             success: false,
-            error: "Only the house owner can delete flats",
+            error: "Flat not found",
           });
         }
-      }
 
-      // Check if flat has active renter
-      if (flat.renter_id) {
-        return res.status(400).json({
-          success: false,
-          error: "Cannot delete flat with active renter. Remove renter first.",
+        // Check permission
+        if (req.user.role.slug !== "web_owner") {
+          const ownerId = flat.ownerId || flat.owner_id;
+          if (ownerId !== userId) {
+            await trx.rollback();
+            return res.status(403).json({
+              success: false,
+              error: "Only the house owner can delete flats",
+            });
+          }
+        }
+
+        // Check if flat has active renter
+        if (flat.renter_id) {
+          await trx.rollback();
+          return res.status(400).json({
+            success: false,
+            error:
+              "Cannot delete flat with active renter. Remove renter first.",
+          });
+        }
+
+        // Check if there are pending payments
+        const pendingPayments = await trx("rent_payment")
+          .where("flat_id", id)
+          .andWhere("status", "in", ["pending", "overdue"])
+          .first();
+
+        if (pendingPayments) {
+          await trx.rollback();
+          return res.status(400).json({
+            success: false,
+            error: "Cannot delete flat with pending payments",
+          });
+        }
+
+        // First, delete all related rent_payment records
+        await trx("rent_payment").where("flat_id", id).delete();
+
+        // Also delete any notices associated with this flat
+        await trx("notice").where("flatId", id).delete();
+
+        // Now delete the flat
+        await trx("flat").where("id", id).delete();
+
+        // Decrement the house flat count
+        await trx("house").where("id", flat.house_id).decrement("flatCount", 1);
+
+        await trx.commit();
+
+        return res.json({
+          success: true,
+          message: "Flat deleted successfully",
         });
+      } catch (error) {
+        await trx.rollback();
+        throw error;
       }
-
-      // Check if there are pending payments
-      const pendingPayments = await db("rent_payment")
-        .where("flat_id", id)
-        .andWhere("status", "in", ["pending", "overdue"])
-        .first();
-
-      if (pendingPayments) {
-        return res.status(400).json({
-          success: false,
-          error: "Cannot delete flat with pending payments",
-        });
-      }
-
-        await db("flat").where("id", id).delete();
-
-
-
-      return res.json({
-        success: true,
-        message: "Flat deleted successfully",
-      });
     } catch (error) {
       console.error("Delete flat error:", error);
       return res.status(500).json({
@@ -582,95 +597,164 @@ class FlatController {
     }
   }
 
-  // 6. Assign renter to flat
-  async assignRenter(req, res) {
-    try {
-      const { id } = req.params;
-      const { renter_id } = req.body;
-      const userId = req.user.id;
+    // 6. Assign renter to flat
+    async assignRenter(req, res) {
+      try {
+        const { id } = req.params;
+        const { renter_id, amenities = [] } = req.body;
+        const userId = req.user.id;
 
-      // Get flat with house info
-      const flat = await db("flat")
+        // Get flat with house info
+        const flat = await db("flat")
         .join("house", "flat.house_id", "house.id")
         .where("flat.id", id)
-        .select("flat.*", "house.ownerId")
+        .select("flat.*", "house.ownerId", "house.metadata as house_metadata")
         .first();
 
-      if (!flat) {
+        if (!flat) {
         return res.status(404).json({
-          success: false,
-          error: "Flat not found",
+            success: false,
+            error: "Flat not found",
         });
-      }
+        }
 
-      // Check permission
-      if (req.user.role.slug !== "web_owner") {
+        // Check permission
+        if (req.user.role.slug !== "web_owner") {
         const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
         if (!hasAccess) {
-          return res.status(403).json({
+            return res.status(403).json({
             success: false,
             error: "You do not have permission to assign renter",
-          });
+            });
         }
-      }
+        }
 
-      // Check if flat already has renter
-      if (flat.renter_id) {
+        // Check if flat already has renter
+        if (flat.renter_id) {
         return res.status(400).json({
-          success: false,
-          error: "Flat already has an active renter",
+            success: false,
+            error: "Flat already has an active renter",
         });
-      }
+        }
 
-      // Get renter
-      const renter = await db("renter").where("id", renter_id).first();
-      if (!renter) {
+        // Get renter
+        const renter = await db("renter").where("id", renter_id).first();
+        if (!renter) {
         return res.status(404).json({
-          success: false,
-          error: "Renter not found",
+            success: false,
+            error: "Renter not found",
         });
-      }
+        }
 
-      // Calculate next rent due date
-      const today = new Date();
-      let dueDate = new Date(
+        // Calculate next rent due date
+        const today = new Date();
+        let dueDate = new Date(
         today.getFullYear(),
         today.getMonth() + 1,
         flat.should_pay_rent_day
-      );
-
-      // If today is after the due day this month, use next month
-      if (today.getDate() > flat.should_pay_rent_day) {
-        dueDate = new Date(
-          today.getFullYear(),
-          today.getMonth() + 2,
-          flat.should_pay_rent_day
         );
-      }
 
-      // Start transaction
-      const trx = await db.transaction();
+        // If today is after the due day this month, use next month
+        if (today.getDate() > flat.should_pay_rent_day) {
+        dueDate = new Date(
+            today.getFullYear(),
+            today.getMonth() + 2,
+            flat.should_pay_rent_day
+        );
+        }
 
-      try {
-        // Update flat
+        // Parse house metadata to get default amenities
+        let houseMetadata = {};
+        try {
+        houseMetadata = typeof flat.house_metadata === 'string' 
+            ? JSON.parse(flat.house_metadata) 
+            : flat.house_metadata || {};
+        } catch (e) {
+        console.error("Error parsing house metadata:", e);
+        houseMetadata = {};
+        }
+
+        const defaultAmenities = houseMetadata.amenities || [];
+        
+        // Process amenities: if none provided, use house defaults; otherwise use provided
+        let finalAmenities = [];
+        if (amenities && amenities.length > 0) {
+        // Use provided amenities with custom charges
+        finalAmenities = amenities.map(amenity => ({
+            name: amenity.name || '',
+            charge: parseFloat(amenity.charge) || 0
+        }));
+        } else if (defaultAmenities.length > 0) {
+        // Use house default amenities
+        finalAmenities = defaultAmenities.map(amenity => ({
+            name: amenity.name || '',
+            charge: parseFloat(amenity.charge) || 0
+        }));
+        }
+
+        // Calculate total charges from amenities
+        const totalAmenitiesCharge = finalAmenities.reduce(
+        (sum, amenity) => sum + (parseFloat(amenity.charge) || 0), 
+        0
+        );
+
+        // Calculate total rent (base rent + amenities)
+        const baseRent = parseFloat(flat.rent_amount) || 0;
+        const totalRent = baseRent + totalAmenitiesCharge;
+
+        // Parse existing flat metadata or initialize
+        let flatMetadata = {};
+        try {
+        flatMetadata = flat.metadata && typeof flat.metadata === 'string'
+            ? JSON.parse(flat.metadata)
+            : flat.metadata || {};
+        } catch (e) {
+        console.error("Error parsing flat metadata:", e);
+        flatMetadata = {};
+        }
+
+        // Update flat metadata with amenities and charges
+        flatMetadata.amenities = finalAmenities;
+        flatMetadata.total_rent = totalRent;
+        flatMetadata.base_rent = baseRent;
+        flatMetadata.total_amenities_charge = totalAmenitiesCharge;
+        flatMetadata.assigned_at = new Date().toISOString();
+        flatMetadata.assigned_by = userId;
+
+        // Start transaction
+        const trx = await db.transaction();
+
+        try {
+        // Update flat with metadata and assign renter
         await trx("flat").where("id", id).update({
-          renter_id,
-          last_rent_paid_date: null,
-          rent_due_date: dueDate,
-          updatedAt: new Date(),
+            renter_id,
+            last_rent_paid_date: null,
+            rent_due_date: dueDate,
+            metadata: JSON.stringify(flatMetadata),
+            updatedAt: new Date(),
         });
 
-        // Create initial rent payment record
+        // Create initial rent payment record with amenities breakdown
         const rentPayment = {
-          uuid: uuidv4(),
-          flat_id: id,
-          renter_id,
-          house_id: flat.house_id,
-          amount: flat.rent_amount || 0,
-          due_date: dueDate,
-          status: "pending",
-          created_at: new Date(),
-          updated_at: new Date(),
+            uuid: uuidv4(),
+            flat_id: id,
+            renter_id,
+            house_id: flat.house_id,
+            amount: totalRent, // Use total rent including amenities
+            base_amount: baseRent, // Store base rent separately
+            amenities_charge: totalAmenitiesCharge, // Store amenities total
+            metadata: JSON.stringify({
+            amenities: finalAmenities,
+            breakdown: {
+                base_rent: baseRent,
+                amenities_charge: totalAmenitiesCharge,
+                total: totalRent
+            }
+            }),
+            due_date: dueDate,
+            status: "pending",
+            created_at: new Date(),
+            updated_at: new Date(),
         };
 
         await trx("rent_payment").insert(rentPayment);
@@ -678,26 +762,32 @@ class FlatController {
         await trx.commit();
 
         return res.json({
-          success: true,
-          data: {
+            success: true,
+            data: {
             flatId: id,
             renterId: renter_id,
             nextDueDate: dueDate,
-          },
-          message: "Renter assigned successfully",
+            totalRent: totalRent,
+            breakdown: {
+                baseRent: baseRent,
+                amenitiesCharge: totalAmenitiesCharge,
+                amenities: finalAmenities
+            }
+            },
+            message: "Renter assigned successfully with amenities charges",
         });
-      } catch (error) {
+        } catch (error) {
         await trx.rollback();
         throw error;
-      }
+        }
     } catch (error) {
-      console.error("Assign renter error:", error);
-      return res.status(500).json({
+        console.error("Assign renter error:", error);
+        return res.status(500).json({
         success: false,
         error: "Failed to assign renter",
-      });
+        });
     }
-  }
+    }
 
   // 7. Remove renter from flat
   async removeRenter(req, res) {
@@ -805,8 +895,10 @@ class FlatController {
       })
       .where("house.id", houseId)
       .andWhere(function () {
-        this.where("house.ownerId", userId)
-          .orWhere("caretakerassignment.caretakerId", userId)
+        this.where("house.ownerId", userId).orWhere(
+          "caretakerassignment.caretakerId",
+          userId
+        );
       })
       .select("house.id")
       .first();

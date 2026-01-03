@@ -26,7 +26,7 @@ app.use(cookieParser());
 app.use(bigIntSerializer);
 app.use(
   cors({
-    origin: ["http://localhost:3005", '**.ngrok-free.app'],
+    origin: ["http://localhost:3005", "http://localhost:4173", '**.ngrok-free.app'],
     methods: "GET,POST,PUT,DELETE,PATCH",
     credentials: true, 
   })
@@ -56,6 +56,7 @@ const financialRoutes = require('./src//routes/financial.routes');
 const flatRoutes = require('./src/routes/flat.routes');
 const authMiddleware = require("./src/middleware/auth.middleware");
 const renterRoutes = require("./src/routes/renter.routes");
+const caretakerRoutes = require("./src/routes/caretaker.routes");
 
 
 // Serve uploaded files with access control
@@ -85,6 +86,7 @@ app.use('/houses', houseRoutes);
 app.use('/', financialRoutes);
 app.use('/', flatRoutes)
 app.use('/', renterRoutes);
+app.use('/caretakers', caretakerRoutes);
 
 //write a running status endpoint at '/'
 app.get("/", (req, res) => {
