@@ -156,28 +156,59 @@ model financial_report {
 }
 
 model flat {
-  id                  BigInt         @id @default(autoincrement())
-  uuid                String         @unique(map: "Flat_uuid_key") @db.VarChar(36)
+  id                  BigInt            @id @default(autoincrement())
+  uuid                String            @unique(map: "Flat_uuid_key") @db.VarChar(36)
   number              String?
-  metadata            String?        @db.LongText
-  createdAt           DateTime       @default(now())
+  metadata            String?           @db.LongText
+  createdAt           DateTime          @default(now())
   updatedAt           DateTime
   name                String
   last_rent_paid_date DateTime?
-  late_fee_percentage Decimal?       @default(5.00) @db.Decimal(5, 2)
-  rent_amount         Decimal?       @db.Decimal(10, 2)
+  late_fee_percentage Decimal?          @default(5.00) @db.Decimal(5, 2)
+  rent_amount         Decimal?          @db.Decimal(10, 2)
   rent_due_date       DateTime?
-  should_pay_rent_day Int            @default(10)
+  should_pay_rent_day Int               @default(10)
   house_id            BigInt
-  renter_id           BigInt?        @unique
-  house               house          @relation(fields: [house_id], references: [id])
-  renter              renter?        @relation(fields: [renter_id], references: [id])
+  renter_id           BigInt?           @unique
+  house               house             @relation(fields: [house_id], references: [id])
+  renter              renter?           @relation(fields: [renter_id], references: [id])
   notice              notice[]
   rent_payments       rent_payment[]
-  floor               Int?           @default(0)
+  floor               Int?              @default(0)
+  next_payment_date   DateTime?
+  advance_payments    advance_payment[]
 
   @@index([house_id], map: "idx_flat_house_id")
   @@index([renter_id], map: "idx_flat_renter_id")
+}
+
+model advance_payment {
+  id               BigInt                 @id @default(autoincrement())
+  uuid             String                 @unique(map: "AdvancePayment_uuid_key") @db.VarChar(36)
+  renter_id        BigInt
+  flat_id          BigInt
+  house_id         BigInt
+  amount           Decimal                @db.Decimal(10, 2)
+  status           advance_payment_status @default(pending)
+  paid_amount      Decimal                @db.Decimal(10, 2)
+  remaining_amount Decimal                @db.Decimal(10, 2)
+  metadata         String?                @db.LongText
+  payment_date     DateTime               @db.Date
+  payment_method   payment_method_enum
+  transaction_id   String?                @db.VarChar(100)
+  notes            String?                @db.Text
+  created_at       DateTime?              @default(now()) @db.Timestamp(0)
+  updated_at       DateTime?              @default(now()) @db.Timestamp(0)
+
+  renter renter @relation(fields: [renter_id], references: [id])
+  flat   flat   @relation(fields: [flat_id], references: [id])
+  house  house  @relation(fields: [house_id], references: [id])
+
+  @@index([renter_id], map: "idx_advance_payment_renter")
+  @@index([flat_id], map: "idx_advance_payment_flat")
+  @@index([house_id], map: "idx_advance_payment_house")
+  @@index([payment_date], map: "idx_advance_payment_date")
+  @@index([status], map: "idx_advance_payment_status")
 }
 
 model house {
@@ -199,6 +230,7 @@ model house {
   house_expenses      house_expense[]
   notice              notice[]
   rent_payments       rent_payment[]
+  advancePayments     advance_payment[]
 
   @@index([ownerId], map: "House_ownerId_idx")
 }
@@ -333,8 +365,8 @@ model registrationtoken {
 }
 
 model renter {
-  id               BigInt         @id @default(autoincrement())
-  uuid             String         @unique(map: "Renter_uuid_key") @db.VarChar(36)
+  id               BigInt            @id @default(autoincrement())
+  uuid             String            @unique(map: "Renter_uuid_key") @db.VarChar(36)
   name             String
   phone            String?
   alternativePhone String?
@@ -342,14 +374,15 @@ model renter {
   nid              String?
   nidFrontImageUrl String?
   nidBackImageUrl  String?
-  status           String?        @default("active")
-  metadata         String?        @db.LongText
+  status           String?           @default("active")
+  metadata         String?           @db.LongText
   createdBy        BigInt?
-  createdAt        DateTime       @default(now())
+  createdAt        DateTime          @default(now())
   updatedAt        DateTime
   flat             flat?
   rent_payments    rent_payment[]
-  user             user?          @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
+  user             user?             @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
+  advance_payments advance_payment[]
 
   @@index([createdBy], map: "Renter_createdBy_fkey")
 }
@@ -554,4 +587,12 @@ enum fee_status_enum {
   pending
   paid
   overdue
+}
+
+enum advance_payment_status {
+  pending
+  paid
+  partially_used
+  fully_used
+  refunded
 }

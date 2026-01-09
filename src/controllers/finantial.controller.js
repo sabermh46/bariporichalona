@@ -1,4 +1,4 @@
-// Updated FinancialController.js with snake_case column names
+// Updated financial.controller.js with snake_case column names
 const db = require('../config/knex');
 const { v4: uuidv4 } = require('uuid');
 const NotificationService = require('../services/emailSmsNotification.service');
@@ -18,6 +18,207 @@ class FinancialController {
         this.sendRentReminders = this.sendRentReminders.bind(this);
 
         this.calculateNextDueDate = this.calculateNextDueDate.bind(this);
+        this.checkHouseAccess = this.checkHouseAccess.bind(this);
+        this.calculateMonthlyProfit = this.calculateMonthlyProfit.bind(this);
+        this.getProfitReport = this.getProfitReport.bind(this);
+    }
+
+    async calculateMonthlyProfit(req, res) {
+    try {
+        const { houseId, month, year } = req.query;
+        const userId = req.user.id;
+
+        // Validate parameters
+        const targetMonth = month ? parseInt(month) : new Date().getMonth() + 1;
+        const targetYear = year ? parseInt(year) : new Date().getFullYear();
+        const startDate = new Date(targetYear, targetMonth - 1, 1);
+        const endDate = new Date(targetYear, targetMonth, 0);
+
+        // Check permission
+        if (req.user.role.slug !== 'web_owner') {
+        const hasAccess = await this.checkHouseAccess(userId, houseId);
+        if (!hasAccess) {
+            return res.status(403).json({
+            success: false,
+            error: 'You do not have permission to view profit for this house',
+            });
+        }
+        }
+
+        // Get all income sources for the month
+        const rentIncome = await db('rent_payment')
+        .where('house_id', houseId)
+        .andWhere('paid_date', '>=', startDate)
+        .andWhere('paid_date', '<=', endDate)
+        .andWhere('status', 'paid')
+        .sum('paid_amount as total')
+        .first();
+
+        const advanceIncome = await db('advance_payment')
+        .where('house_id', houseId)
+        .andWhere('payment_date', '>=', startDate)
+        .andWhere('payment_date', '<=', endDate)
+        .sum('paid_amount as total')
+        .first();
+
+        // Get all expenses for the month
+        const expenses = await db('house_expense')
+        .where('house_id', houseId)
+        .andWhere('expense_date', '>=', startDate)
+        .andWhere('expense_date', '<=', endDate)
+        .andWhere('status', 'approved')
+        .select('category', 'amount', 'description');
+
+        const totalExpenses = expenses.reduce((sum, expense) => 
+        sum + parseFloat(expense.amount || 0), 0
+        );
+
+        // Calculate profit
+        const totalRentIncome = parseFloat(rentIncome?.total || 0);
+        const totalAdvanceIncome = parseFloat(advanceIncome?.total || 0);
+        const totalIncome = totalRentIncome + totalAdvanceIncome;
+        const profit = totalIncome - totalExpenses;
+
+        // Categorize expenses
+        const expenseCategories = {};
+        expenses.forEach(expense => {
+        const category = expense.category;
+        if (!expenseCategories[category]) {
+            expenseCategories[category] = {
+            total: 0,
+            items: []
+            };
+        }
+        expenseCategories[category].total += parseFloat(expense.amount || 0);
+        expenseCategories[category].items.push({
+            amount: expense.amount,
+            description: expense.description
+        });
+        });
+
+        return res.json({
+        success: true,
+        data: {
+            month: targetMonth,
+            year: targetYear,
+            period: `${targetYear}-${String(targetMonth).padStart(2, '0')}`,
+            income: {
+            rent: totalRentIncome,
+            advance_payments: totalAdvanceIncome,
+            total: totalIncome
+            },
+            expenses: {
+            total: totalExpenses,
+            by_category: expenseCategories,
+            items: expenses
+            },
+            profit: {
+            amount: profit,
+            percentage: totalIncome > 0 ? (profit / totalIncome * 100) : 0
+            }
+        }
+        });
+    } catch (error) {
+        console.error('Calculate monthly profit error:', error);
+        return res.status(500).json({
+        success: false,
+        error: 'Failed to calculate monthly profit'
+        });
+    }
+    }
+
+    // Get profit report for multiple months
+    async getProfitReport(req, res) {
+    try {
+        const { houseId, startDate, endDate } = req.query;
+        const userId = req.user.id;
+
+        // Check permission
+        if (req.user.role.slug !== 'web_owner') {
+        const hasAccess = await this.checkHouseAccess(userId, houseId);
+        if (!hasAccess) {
+            return res.status(403).json({
+            success: false,
+            error: 'You do not have permission to view profit report',
+            });
+        }
+        }
+
+        const start = startDate ? new Date(startDate) : new Date(new Date().getFullYear(), 0, 1);
+        const end = endDate ? new Date(endDate) : new Date();
+
+        // Get monthly breakdown
+        const monthlyData = await db.raw(`
+        SELECT 
+            DATE_FORMAT(COALESCE(rp.paid_date, ap.payment_date), '%Y-%m') as month,
+            COALESCE(SUM(rp.paid_amount), 0) as rent_income,
+            COALESCE(SUM(ap.paid_amount), 0) as advance_income,
+            COALESCE(SUM(he.amount), 0) as expenses
+        FROM (
+            SELECT DISTINCT DATE_FORMAT(paid_date, '%Y-%m') as month 
+            FROM rent_payment 
+            WHERE house_id = ? AND paid_date BETWEEN ? AND ?
+            UNION
+            SELECT DISTINCT DATE_FORMAT(payment_date, '%Y-%m') as month 
+            FROM advance_payment 
+            WHERE house_id = ? AND payment_date BETWEEN ? AND ?
+            UNION
+            SELECT DISTINCT DATE_FORMAT(expense_date, '%Y-%m') as month 
+            FROM house_expense 
+            WHERE house_id = ? AND expense_date BETWEEN ? AND ? AND status = 'approved'
+        ) months
+        LEFT JOIN rent_payment rp ON DATE_FORMAT(rp.paid_date, '%Y-%m') = months.month 
+            AND rp.house_id = ? AND rp.status = 'paid'
+        LEFT JOIN advance_payment ap ON DATE_FORMAT(ap.payment_date, '%Y-%m') = months.month 
+            AND ap.house_id = ?
+        LEFT JOIN house_expense he ON DATE_FORMAT(he.expense_date, '%Y-%m') = months.month 
+            AND he.house_id = ? AND he.status = 'approved'
+        GROUP BY months.month
+        ORDER BY months.month
+        `, [houseId, start, end, houseId, start, end, houseId, start, end, houseId, houseId, houseId]);
+
+        const report = monthlyData[0].map(row => ({
+        month: row.month,
+        rent_income: parseFloat(row.rent_income || 0),
+        advance_income: parseFloat(row.advance_income || 0),
+        total_income: parseFloat(row.rent_income || 0) + parseFloat(row.advance_income || 0),
+        expenses: parseFloat(row.expenses || 0),
+        profit: (parseFloat(row.rent_income || 0) + parseFloat(row.advance_income || 0)) - parseFloat(row.expenses || 0)
+        }));
+
+        // Calculate totals
+        const totals = report.reduce((acc, row) => ({
+        rent_income: acc.rent_income + row.rent_income,
+        advance_income: acc.advance_income + row.advance_income,
+        total_income: acc.total_income + row.total_income,
+        expenses: acc.expenses + row.expenses,
+        profit: acc.profit + row.profit
+        }), {
+        rent_income: 0,
+        advance_income: 0,
+        total_income: 0,
+        expenses: 0,
+        profit: 0
+        });
+
+        return res.json({
+        success: true,
+        data: {
+            period: {
+            start: start.toISOString().split('T')[0],
+            end: end.toISOString().split('T')[0]
+            },
+            monthly_breakdown: report,
+            totals: totals
+        }
+        });
+    } catch (error) {
+        console.error('Get profit report error:', error);
+        return res.status(500).json({
+        success: false,
+        error: 'Failed to generate profit report'
+        });
+    }
     }
     // 1. Record rent payment (manual by house owner + need to ensure that caretaker has permission)
     async recordRentPayment(req, res) {
@@ -32,7 +233,8 @@ class FinancialController {
             amenities = [],
             base_rent,
             amenities_total,
-            late_fee
+            late_fee,
+            use_advance_payment = false
         } = req.body;
         
         const userId = req.user.id;
@@ -194,12 +396,49 @@ class FinancialController {
             status = 'paid';
         }
 
+        let advancePaymentUsed = null;
+        if (use_advance_payment) {
+        const availableAdvance = await db('advance_payment')
+            .where('flat_id', flat_id)
+            .andWhere('renter_id', currentPayment.renter_id)
+            .andWhere('remaining_amount', '>', 0)
+            .orderBy('payment_date', 'asc')
+            .first();
+
+        if (availableAdvance) {
+            const useAmount = Math.min(
+            parseFloat(availableAdvance.remaining_amount),
+            parseFloat(paid_amount) || totalAmount
+            );
+            
+            // Apply advance payment
+            const newRemaining = parseFloat(availableAdvance.remaining_amount) - useAmount;
+            await db('advance_payment')
+            .where('id', availableAdvance.id)
+            .update({
+                remaining_amount: newRemaining,
+                status: newRemaining > 0 ? 'partially_used' : 'fully_used',
+                updated_at: new Date()
+            });
+
+            advancePaymentUsed = {
+            advance_payment_id: availableAdvance.id,
+            amount: useAmount,
+            remaining: newRemaining
+            };
+
+            // Adjust paid amount
+            paid_amount = (parseFloat(paid_amount) || totalAmount) - useAmount;
+        }
+        }
+
         // Prepare payment metadata
         const paymentMetadata = {
             amenities: paymentAmenities,
             amenitiesTotal: amenitiesTotal,
             lateFee: finalLateFee,
             baseRent: baseRentAmount,
+            advancePaymentUsed: advancePaymentUsed,
             renterDetails: {
                 name: flat.renterName,
                 nid: flat.renterNid

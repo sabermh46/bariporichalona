@@ -2,15 +2,63 @@
 const db = require('../config/knex');
 const { v4: uuidv4 } = require('uuid');
 const { 
-    uploadMiddleware, 
     moveToPermanentLocation, 
     cleanupTempFiles, 
-    getFileUrl 
+    getFileUrl, 
+    uploadMultipleMiddleware
 } = require('../utils/fileUpload');
 const path = require('path');
+const fs = require('fs');
 const { hasPermission } = require('../services/permission.service');
 
 class RenterController {
+
+    constructor() {
+        // Bind methods if necessary
+        this.uploadFiles = this.uploadFiles.bind(this);
+        this.createRenter = this.createRenter.bind(this);
+        this.getRenters = this.getRenters.bind(this);
+        this.getRenterDetails = this.getRenterDetails.bind(this);
+        this.updateRenter = this.updateRenter.bind(this);
+        this.deleteRenter = this.deleteRenter.bind(this);
+        this.getAvailableRenters = this.getAvailableRenters.bind(this);
+        this.checkRenterAccess = this.checkRenterAccess.bind(this);
+        this.getAccessibleHouseOwners = this.getAccessibleHouseOwners.bind(this);
+    }
+
+    // Add this helper function at the top of the class
+      _safeDeleteFile(fileUrl) {
+        if (!fileUrl) return;
+        try {
+        // Remove the base URL to get relative path
+        const relativePath = fileUrl.replace(/^\/uploads\//, '');
+        const fullPath = path.join(process.cwd(), 'uploads', relativePath);
+        
+        // Security: Normalize paths and ensure we're within uploads directory
+        const normalizedFullPath = path.normalize(fullPath);
+        const normalizedUploadsDir = path.normalize(path.join(process.cwd(), 'uploads'));
+        
+        if (normalizedFullPath.startsWith(normalizedUploadsDir)) {
+            if (fs.existsSync(normalizedFullPath)) {
+            fs.unlinkSync(normalizedFullPath);
+            }
+        } else {
+            console.warn('Security warning: Attempted to delete file outside uploads directory');
+        }
+        } catch (error) {
+        console.error('Error deleting file:', error);
+        // Don't throw - file cleanup failure shouldn't break the main operation
+        }
+    }
+
+    // Fixed: Added upload middleware method
+    uploadFiles() {
+        return uploadMultipleMiddleware([
+        { name: 'nidFrontImage', maxCount: 1 },
+        { name: 'nidBackImage', maxCount: 1 }
+        ]);
+    }
+
     // 1. Create renter with file upload
     async createRenter(req, res) {
         let tempFiles = [];
@@ -248,22 +296,46 @@ class RenterController {
             
             // Apply permission filters
             if (userRole === 'web_owner') {
-                // Web owner can see all renters
+                console.log("it is web owner");
             } 
+            if(userRole === 'staff') {
+                const hasPerm = await hasPermission(userId, 'renter.view');
+                if (hasPerm) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'You do not have permission to view renters',
+                        data: [],
+                        meta: {
+                            page: parseInt(page),
+                            limit: parseInt(limit),
+                            total: 0,
+                            totalPages: 0
+                        }
+                    })
+                }
+            }
             else if (userRole === 'house_owner') {
                 // House owner can only see renters they created
                 query.where('renter.createdBy', userId);
             }
-            else if (userRole === 'staff') {
-                // Staff can see renters based on their assignments
-                const accessibleHouseOwners = await this.getAccessibleHouseOwners(userId);
-                query.whereIn('renter.createdBy', accessibleHouseOwners);
-            }
-            else {
-                return res.status(403).json({
-                    success: false,
-                    error: 'You do not have permission to view renters'
-                });
+            else if (userRole === 'caretaker') {
+                // First, check if they have the global permission to view renters
+                const hasViewPermission = await hasPermission(userId, 'renter.view');
+                if (hasViewPermission) {
+                    // Staff/Caretaker with global permission can see renters from houses they manage
+                    const accessibleHouseOwners = await this.getAccessibleHouseOwners(userId);
+                    if (accessibleHouseOwners.length > 0) {
+                        query.whereIn('renter.createdBy', accessibleHouseOwners);
+                    } else {
+                        // No access to any house owner, return empty
+                        query.where('1', '0');
+                    }
+                } else {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'You do not have permission to view renters'
+                    });
+                }
             }
             
             // Apply search filter
@@ -308,7 +380,7 @@ class RenterController {
             const renters = await query
                 .limit(limit)
                 .offset(offset)
-                .orderBy('renter.created_at', 'desc');
+                .orderBy('renter.createdAt', 'desc');
             
             // For each renter, get associated flats
             const rentersWithFlats = await Promise.all(
@@ -358,6 +430,8 @@ class RenterController {
             const { id } = req.params;
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
+            console.log("hits here");
+            
             
             // Get renter with creator info
             const renter = await db('renter')
@@ -475,6 +549,10 @@ class RenterController {
                     updated_at: new Date()
                 };
                 
+                delete updateData.id;
+                delete updateData.uuid;
+                delete updateData.createdBy;
+                delete updateData.createdAt;
                 // Handle metadata update
                 if (updates.metadata) {
                     try {
@@ -490,6 +568,7 @@ class RenterController {
                             lastUpdatedAt: new Date().toISOString()
                         });
                     } catch (e) {
+                        console.error('Error parsing metadata:', e);
                         // Keep existing metadata if parsing fails
                         delete updateData.metadata;
                     }
@@ -514,11 +593,8 @@ class RenterController {
                     updateData.nidFrontImageUrl = nidFrontImageUrl;
                     
                     // Delete old file if exists
-                    if (renter.nidFrontImageUrl) {
-                        const oldPath = path.join(process.cwd(), 'uploads', renter.nidFrontImageUrl);
-                        if (fs.existsSync(oldPath)) {
-                            fs.unlinkSync(oldPath);
-                        }
+                    if (renter.nidFrontImageUrl && nidFrontImageUrl !== renter.nidFrontImageUrl) {
+                        this._safeDeleteFile(renter.nidFrontImageUrl);
                     }
                 }
                 
@@ -536,12 +612,9 @@ class RenterController {
                     nidBackImageUrl = getFileUrl(permanentPath);
                     updateData.nidBackImageUrl = nidBackImageUrl;
                     
-                    // Delete old file if exists
-                    if (renter.nidBackImageUrl) {
-                        const oldPath = path.join(process.cwd(), 'uploads', renter.nidBackImageUrl);
-                        if (fs.existsSync(oldPath)) {
-                            fs.unlinkSync(oldPath);
-                        }
+
+                    if (renter.nidBackImageUrl && nidBackImageUrl !== renter.nidBackImageUrl) {
+                        this._safeDeleteFile(renter.nidBackImageUrl);
                     }
                 }
                 
@@ -764,8 +837,11 @@ class RenterController {
         
         if (userRole === 'staff') {
             // Check if staff has access to the house owner who created this renter
-            const accessibleHouseOwners = await this.getAccessibleHouseOwners(userId);
-            return accessibleHouseOwners.includes(renter.createdBy);
+            const hasPerm = await hasPermission(userId, 'renter.view');
+            if (!hasPerm) {
+                return false;
+            }
+            return hasPerm;
         }
         
         return false;

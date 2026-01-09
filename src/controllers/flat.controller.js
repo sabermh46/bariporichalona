@@ -1,4 +1,4 @@
-// FlatController.js - Updated with consistent column naming
+// flat.controller.js - Updated with consistent column naming
 const db = require("../config/knex");
 const { v4: uuidv4 } = require("uuid");
 const { hasPermission } = require("../services/permission.service");
@@ -597,105 +597,115 @@ class FlatController {
     }
   }
 
-    // 6. Assign renter to flat
+    // 6. Assign renter to flat (Updated with advance payment and custom next payment date)
     async assignRenter(req, res) {
       try {
-        const { id } = req.params;
-        const { renter_id, amenities = [] } = req.body;
+        const { 
+          id 
+        } = req.params;
+        const { 
+          renter_id, 
+          amenities = [], 
+          next_payment_date, // New: Custom next payment date
+          advance_payments = [] // New: Array of advance payments
+        } = req.body;
         const userId = req.user.id;
 
         // Get flat with house info
-        const flat = await db("flat")
-        .join("house", "flat.house_id", "house.id")
-        .where("flat.id", id)
-        .select("flat.*", "house.ownerId", "house.metadata as house_metadata")
-        .first();
+        const flat = await db('flat')
+          .join('house', 'flat.house_id', 'house.id')
+          .where('flat.id', id)
+          .select('flat.*', 'house.ownerId', 'house.metadata as house_metadata')
+          .first();
 
         if (!flat) {
-        return res.status(404).json({
+          return res.status(404).json({
             success: false,
-            error: "Flat not found",
-        });
+            error: 'Flat not found',
+          });
         }
 
         // Check permission
-        if (req.user.role.slug !== "web_owner") {
-        const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
-        if (!hasAccess) {
+        if (req.user.role.slug !== 'web_owner') {
+          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+          if (!hasAccess) {
             return res.status(403).json({
-            success: false,
-            error: "You do not have permission to assign renter",
+              success: false,
+              error: 'You do not have permission to assign renter',
             });
-        }
+          }
         }
 
         // Check if flat already has renter
         if (flat.renter_id) {
-        return res.status(400).json({
+          return res.status(400).json({
             success: false,
-            error: "Flat already has an active renter",
-        });
+            error: 'Flat already has an active renter',
+          });
         }
 
         // Get renter
-        const renter = await db("renter").where("id", renter_id).first();
+        const renter = await db('renter').where('id', renter_id).first();
         if (!renter) {
-        return res.status(404).json({
+          return res.status(404).json({
             success: false,
-            error: "Renter not found",
-        });
+            error: 'Renter not found',
+          });
         }
 
-        // Calculate next rent due date
-        const today = new Date();
-        let dueDate = new Date(
-        today.getFullYear(),
-        today.getMonth() + 1,
-        flat.should_pay_rent_day
-        );
-
-        // If today is after the due day this month, use next month
-        if (today.getDate() > flat.should_pay_rent_day) {
-        dueDate = new Date(
+        // Calculate next rent due date - Use custom date if provided, otherwise calculate
+        let dueDate;
+        if (next_payment_date) {
+          dueDate = new Date(next_payment_date);
+        } else {
+          const today = new Date();
+          dueDate = new Date(
             today.getFullYear(),
-            today.getMonth() + 2,
+            today.getMonth() + 1,
             flat.should_pay_rent_day
-        );
+          );
+
+          // If today is after the due day this month, use next month
+          if (today.getDate() > flat.should_pay_rent_day) {
+            dueDate = new Date(
+              today.getFullYear(),
+              today.getMonth() + 2,
+              flat.should_pay_rent_day
+            );
+          }
         }
 
         // Parse house metadata to get default amenities
         let houseMetadata = {};
         try {
-        houseMetadata = typeof flat.house_metadata === 'string' 
+          houseMetadata = typeof flat.house_metadata === 'string' 
             ? JSON.parse(flat.house_metadata) 
             : flat.house_metadata || {};
         } catch (e) {
-        console.error("Error parsing house metadata:", e);
-        houseMetadata = {};
+          console.error('Error parsing house metadata:', e);
+          houseMetadata = {};
         }
 
         const defaultAmenities = houseMetadata.amenities || [];
         
-        // Process amenities: if none provided, use house defaults; otherwise use provided
+        // Process amenities
         let finalAmenities = [];
         if (amenities && amenities.length > 0) {
-        // Use provided amenities with custom charges
-        finalAmenities = amenities.map(amenity => ({
+          finalAmenities = amenities.map(amenity => ({
             name: amenity.name || '',
             charge: parseFloat(amenity.charge) || 0
-        }));
+          }));
         } else if (defaultAmenities.length > 0) {
-        // Use house default amenities
-        finalAmenities = defaultAmenities.map(amenity => ({
+          finalAmenities = defaultAmenities.map(amenity => ({
             name: amenity.name || '',
             charge: parseFloat(amenity.charge) || 0
-        }));
+          }));
         }
 
         // Calculate total charges from amenities
         const totalAmenitiesCharge = finalAmenities.reduce(
-        (sum, amenity) => sum + (parseFloat(amenity.charge) || 0), 
-        0
+          (sum, amenity) => sum + (parseFloat(amenity.charge) || 0), 
+          0
         );
 
         // Calculate total rent (base rent + amenities)
@@ -705,88 +715,347 @@ class FlatController {
         // Parse existing flat metadata or initialize
         let flatMetadata = {};
         try {
-        flatMetadata = flat.metadata && typeof flat.metadata === 'string'
+          flatMetadata = flat.metadata && typeof flat.metadata === 'string'
             ? JSON.parse(flat.metadata)
             : flat.metadata || {};
         } catch (e) {
-        console.error("Error parsing flat metadata:", e);
-        flatMetadata = {};
+          console.error('Error parsing flat metadata:', e);
+          flatMetadata = {};
         }
 
-        // Update flat metadata with amenities and charges
+        // Update flat metadata
         flatMetadata.amenities = finalAmenities;
         flatMetadata.total_rent = totalRent;
         flatMetadata.base_rent = baseRent;
         flatMetadata.total_amenities_charge = totalAmenitiesCharge;
         flatMetadata.assigned_at = new Date().toISOString();
         flatMetadata.assigned_by = userId;
+        
+        // Store advance payment summary in metadata
+        if (advance_payments && advance_payments.length > 0) {
+          flatMetadata.advance_payments_summary = {
+            total_advance: advance_payments.reduce((sum, payment) => sum + parseFloat(payment.amount || 0), 0),
+            payment_count: advance_payments.length,
+            payments: advance_payments.map(p => ({
+              amount: p.amount,
+              date: p.payment_date,
+              method: p.payment_method
+            }))
+          };
+        }
 
         // Start transaction
         const trx = await db.transaction();
 
         try {
-        // Update flat with metadata and assign renter
-        await trx("flat").where("id", id).update({
+          // Update flat with metadata and assign renter
+          await trx('flat').where('id', id).update({
             renter_id,
             last_rent_paid_date: null,
             rent_due_date: dueDate,
+            next_payment_date: dueDate, // Store the custom next payment date
             metadata: JSON.stringify(flatMetadata),
             updatedAt: new Date(),
-        });
+          });
 
-        // Create initial rent payment record with amenities breakdown
-        const rentPayment = {
+          // Create initial rent payment record
+          const rentPayment = {
             uuid: uuidv4(),
             flat_id: id,
             renter_id,
             house_id: flat.house_id,
-            amount: totalRent, // Use total rent including amenities
-            base_amount: baseRent, // Store base rent separately
-            amenities_charge: totalAmenitiesCharge, // Store amenities total
+            amount: totalRent,
+            base_amount: baseRent,
+            amenities_charge: totalAmenitiesCharge,
             metadata: JSON.stringify({
-            amenities: finalAmenities,
-            breakdown: {
+              amenities: finalAmenities,
+              breakdown: {
                 base_rent: baseRent,
                 amenities_charge: totalAmenitiesCharge,
                 total: totalRent
-            }
+              }
             }),
             due_date: dueDate,
-            status: "pending",
+            status: 'pending',
             created_at: new Date(),
             updated_at: new Date(),
-        };
+          };
 
-        await trx("rent_payment").insert(rentPayment);
+          await trx('rent_payment').insert(rentPayment);
 
-        await trx.commit();
+          // Process advance payments if any
+          if (advance_payments && advance_payments.length > 0) {
+            for (const advancePayment of advance_payments) {
+              const advanceRecord = {
+                uuid: uuidv4(),
+                renter_id,
+                flat_id: id,
+                house_id: flat.house_id,
+                amount: parseFloat(advancePayment.amount) || 0,
+                paid_amount: parseFloat(advancePayment.paid_amount) || parseFloat(advancePayment.amount) || 0,
+                remaining_amount: parseFloat(advancePayment.amount) || 0,
+                status: 'paid',
+                payment_date: advancePayment.payment_date ? new Date(advancePayment.payment_date) : new Date(),
+                payment_method: advancePayment.payment_method || 'cash',
+                transaction_id: advancePayment.transaction_id,
+                notes: advancePayment.notes,
+                metadata: JSON.stringify({
+                  type: 'advance',
+                  for_months: advancePayment.for_months || 0,
+                  description: advancePayment.description || 'Advance payment'
+                }),
+                created_at: new Date(),
+                updated_at: new Date(),
+              };
+              
+              await trx('advance_payment').insert(advanceRecord);
+            }
+          }
 
-        return res.json({
+          // Also update renter metadata with advance payments info
+          let renterMetadata = {};
+          try {
+            renterMetadata = renter.metadata && typeof renter.metadata === 'string'
+              ? JSON.parse(renter.metadata)
+              : renter.metadata || {};
+          } catch (e) {
+            console.error('Error parsing renter metadata:', e);
+            renterMetadata = {};
+          }
+
+          if (advance_payments && advance_payments.length > 0) {
+            renterMetadata.advance_payments = advance_payments.map(payment => ({
+              paid_amount: payment.amount,
+              date: payment.payment_date || new Date().toISOString(),
+              method: payment.payment_method,
+              flat_id: id,
+              house_id: flat.house_id,
+              description: payment.description || 'Advance payment'
+            }));
+            renterMetadata.current_flat_id = id;
+            renterMetadata.current_house_id = flat.house_id;
+            
+            await trx('renter').where('id', renter_id).update({
+              metadata: JSON.stringify(renterMetadata),
+              updatedAt: new Date(),
+            });
+          }
+
+          await trx.commit();
+
+          return res.json({
             success: true,
             data: {
-            flatId: id,
-            renterId: renter_id,
-            nextDueDate: dueDate,
-            totalRent: totalRent,
-            breakdown: {
+              flatId: id,
+              renterId: renter_id,
+              nextDueDate: dueDate,
+              totalRent: totalRent,
+              advancePayments: advance_payments || [],
+              breakdown: {
                 baseRent: baseRent,
                 amenitiesCharge: totalAmenitiesCharge,
                 amenities: finalAmenities
-            }
+              }
             },
-            message: "Renter assigned successfully with amenities charges",
-        });
+            message: 'Renter assigned successfully with advance payments',
+          });
         } catch (error) {
-        await trx.rollback();
-        throw error;
+          await trx.rollback();
+          throw error;
         }
-    } catch (error) {
-        console.error("Assign renter error:", error);
+      } catch (error) {
+        console.error('Assign renter error:', error);
         return res.status(500).json({
-        success: false,
-        error: "Failed to assign renter",
+          success: false,
+          error: 'Failed to assign renter',
         });
+      }
     }
+
+    // Add this method to apply advance payment to rent
+    async applyAdvancePayment(req, res) {
+      try {
+        const { id: flat_id } = req.params;
+        const { advance_payment_id, rent_payment_id, amount } = req.body;
+        const userId = req.user.id;
+
+        // Get flat and check permissions
+        const flat = await db('flat')
+          .join('house', 'flat.house_id', 'house.id')
+          .where('flat.id', flat_id)
+          .select('flat.*', 'house.ownerId')
+          .first();
+
+        if (!flat) {
+          return res.status(404).json({
+            success: false,
+            error: 'Flat not found',
+          });
+        }
+
+        // Check permission
+        if (req.user.role.slug !== 'web_owner') {
+          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+          if (!hasAccess) {
+            return res.status(403).json({
+              success: false,
+              error: 'You do not have permission',
+            });
+          }
+        }
+
+        // Get advance payment
+        const advancePayment = await db('advance_payment')
+          .where('id', advance_payment_id)
+          .andWhere('flat_id', flat_id)
+          .first();
+
+        if (!advancePayment) {
+          return res.status(404).json({
+            success: false,
+            error: 'Advance payment not found',
+          });
+        }
+
+        // Get rent payment
+        const rentPayment = await db('rent_payment')
+          .where('id', rent_payment_id)
+          .andWhere('flat_id', flat_id)
+          .first();
+
+        if (!rentPayment) {
+          return res.status(404).json({
+            success: false,
+            error: 'Rent payment not found',
+          });
+        }
+
+        const applyAmount = parseFloat(amount) || parseFloat(advancePayment.remaining_amount) || 0;
+        
+        if (applyAmount <= 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid amount',
+          });
+        }
+
+        if (applyAmount > advancePayment.remaining_amount) {
+          return res.status(400).json({
+            success: false,
+            error: 'Amount exceeds remaining advance payment',
+          });
+        }
+
+        const trx = await db.transaction();
+
+        try {
+          // Update advance payment
+          const newRemaining = parseFloat(advancePayment.remaining_amount) - applyAmount;
+          const advanceStatus = newRemaining > 0 ? 'partially_used' : 'fully_used';
+          
+          await trx('advance_payment')
+            .where('id', advance_payment_id)
+            .update({
+              remaining_amount: newRemaining,
+              status: advanceStatus,
+              updated_at: new Date(),
+            });
+
+          // Update rent payment
+          const currentPaid = parseFloat(rentPayment.paid_amount) || 0;
+          const newPaid = currentPaid + applyAmount;
+          const rentStatus = newPaid >= rentPayment.amount ? 'paid' : 
+                            newPaid > 0 ? 'partial' : 'pending';
+
+          await trx('rent_payment')
+            .where('id', rent_payment_id)
+            .update({
+              paid_amount: newPaid,
+              status: rentStatus,
+              updated_at: new Date(),
+              metadata: JSON.stringify({
+                ...(rentPayment.metadata ? JSON.parse(rentPayment.metadata) : {}),
+                advance_payment_used: {
+                  advance_payment_id,
+                  amount: applyAmount,
+                  applied_at: new Date().toISOString()
+                }
+              }),
+            });
+
+          await trx.commit();
+
+          return res.json({
+            success: true,
+            data: {
+              advance_payment_id,
+              rent_payment_id,
+              amount_applied: applyAmount,
+              remaining_advance: newRemaining,
+              rent_status: rentStatus,
+            },
+            message: 'Advance payment applied successfully',
+          });
+        } catch (error) {
+          await trx.rollback();
+          throw error;
+        }
+      } catch (error) {
+        console.error('Apply advance payment error:', error);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to apply advance payment',
+        });
+      }
+    }
+
+    // Add this method to get advance payments for a flat
+    async getFlatAdvancePayments(req, res) {
+      try {
+        const { id: flat_id } = req.params;
+        const userId = req.user.id;
+
+        // Get flat and check permissions
+        const flat = await db('flat')
+          .join('house', 'flat.house_id', 'house.id')
+          .where('flat.id', flat_id)
+          .select('flat.*', 'house.ownerId')
+          .first();
+
+        if (!flat) {
+          return res.status(404).json({
+            success: false,
+            error: 'Flat not found',
+          });
+        }
+
+        // Check permission
+        if (req.user.role.slug !== 'web_owner') {
+          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+          if (!hasAccess) {
+            return res.status(403).json({
+              success: false,
+              error: 'You do not have permission',
+            });
+          }
+        }
+
+        // Get advance payments
+        const advancePayments = await db('advance_payment')
+          .where('flat_id', flat_id)
+          .orderBy('payment_date', 'desc');
+
+        return res.json({
+          success: true,
+          data: advancePayments,
+        });
+      } catch (error) {
+        console.error('Get advance payments error:', error);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to fetch advance payments',
+        });
+      }
     }
 
   // 7. Remove renter from flat

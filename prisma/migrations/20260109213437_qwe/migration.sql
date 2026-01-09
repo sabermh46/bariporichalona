@@ -162,11 +162,40 @@ CREATE TABLE `flat` (
     `house_id` BIGINT NOT NULL,
     `renter_id` BIGINT NULL,
     `floor` INTEGER NULL DEFAULT 0,
+    `next_payment_date` DATETIME(3) NULL,
 
     UNIQUE INDEX `Flat_uuid_key`(`uuid`),
     UNIQUE INDEX `flat_renter_id_key`(`renter_id`),
     INDEX `idx_flat_house_id`(`house_id`),
     INDEX `idx_flat_renter_id`(`renter_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `advance_payment` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `uuid` VARCHAR(36) NOT NULL,
+    `renter_id` BIGINT NOT NULL,
+    `flat_id` BIGINT NOT NULL,
+    `house_id` BIGINT NOT NULL,
+    `amount` DECIMAL(10, 2) NOT NULL,
+    `status` ENUM('pending', 'paid', 'partially_used', 'fully_used', 'refunded') NOT NULL DEFAULT 'pending',
+    `paid_amount` DECIMAL(10, 2) NOT NULL,
+    `remaining_amount` DECIMAL(10, 2) NOT NULL,
+    `metadata` LONGTEXT NULL,
+    `payment_date` DATE NOT NULL,
+    `payment_method` ENUM('cash', 'bank', 'mobile_banking', 'other') NOT NULL,
+    `transaction_id` VARCHAR(100) NULL,
+    `notes` TEXT NULL,
+    `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+    `updated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+
+    UNIQUE INDEX `AdvancePayment_uuid_key`(`uuid`),
+    INDEX `idx_advance_payment_renter`(`renter_id`),
+    INDEX `idx_advance_payment_flat`(`flat_id`),
+    INDEX `idx_advance_payment_house`(`house_id`),
+    INDEX `idx_advance_payment_date`(`payment_date`),
+    INDEX `idx_advance_payment_status`(`status`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -551,6 +580,15 @@ ALTER TABLE `flat` ADD CONSTRAINT `flat_house_id_fkey` FOREIGN KEY (`house_id`) 
 
 -- AddForeignKey
 ALTER TABLE `flat` ADD CONSTRAINT `flat_renter_id_fkey` FOREIGN KEY (`renter_id`) REFERENCES `renter`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `advance_payment` ADD CONSTRAINT `advance_payment_renter_id_fkey` FOREIGN KEY (`renter_id`) REFERENCES `renter`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `advance_payment` ADD CONSTRAINT `advance_payment_flat_id_fkey` FOREIGN KEY (`flat_id`) REFERENCES `flat`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `advance_payment` ADD CONSTRAINT `advance_payment_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `house` ADD CONSTRAINT `House_ownerId_fkey` FOREIGN KEY (`ownerId`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;

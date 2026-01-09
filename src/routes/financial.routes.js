@@ -154,4 +154,7 @@ router.post('/financial/generate-invoices',
     FinancialController.generateRentInvoices
 );
 
+router.get('/financial/monthly-profit', authMiddleware, FinancialController.calculateMonthlyProfit);
+router.get('/financial/profit-report', authMiddleware, FinancialController.getProfitReport);
+
 module.exports = router;

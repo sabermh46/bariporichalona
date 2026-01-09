@@ -57,20 +57,12 @@ const flatRoutes = require('./src/routes/flat.routes');
 const authMiddleware = require("./src/middleware/auth.middleware");
 const renterRoutes = require("./src/routes/renter.routes");
 const caretakerRoutes = require("./src/routes/caretaker.routes");
+const imageRoutes = require('./src/routes/image.routes');
 
+app.use('/api/images', imageRoutes);
 
-// Serve uploaded files with access control
-app.use('/uploads', 
-    authMiddleware, // Optional: remove if you want to handle auth in fileAccessMiddleware
-    fileAccessMiddleware,
-    express.static(path.join(__dirname, 'uploads'), {
-        setHeaders: (res, filePath) => {
-            // Set appropriate headers for security
-            res.set('Cache-Control', 'private, max-age=3600');
-            res.set('X-Content-Type-Options', 'nosniff');
-        }
-    })
-);
+// Static files (public uploads if any)
+app.use('/public/uploads', express.static(path.join(__dirname, 'uploads', 'public')));
 
 
 app.use("/auth", googleRoute);

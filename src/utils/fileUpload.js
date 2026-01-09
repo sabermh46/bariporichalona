@@ -47,10 +47,12 @@ const upload = multer({
     }
 });
 
-// Middleware to handle file uploads
-const uploadMiddleware = (fieldName) => {
-    return upload.single(fieldName);
+const uploadMultipleMiddleware = (fields) => {
+    return upload.fields(fields);
 };
+const uploadSingleMiddleware = (fieldName) => {
+    return upload.single(fieldName);
+}
 
 // Move file from temp to permanent location
 const moveToPermanentLocation = (tempFilePath, destinationFolder, filename) => {
@@ -80,14 +82,15 @@ const cleanupTempFiles = (filePaths) => {
 
 // Get file URL
 const getFileUrl = (filePath) => {
-    if (!filePath) return null;
-    return `/uploads/${filePath}`;
+  if (!filePath) return null;
+  return `/uploads/${filePath.replace(/\\/g, '/')}`;
 };
 
 module.exports = {
-    uploadMiddleware,
-    moveToPermanentLocation,
-    cleanupTempFiles,
-    getFileUrl,
-    uploadsDir
+  uploadMultipleMiddleware,
+  uploadSingleMiddleware,
+  moveToPermanentLocation,
+  cleanupTempFiles,
+  getFileUrl,
+  uploadsDir
 };
