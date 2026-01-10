@@ -546,7 +546,7 @@ class RenterController {
             try {
                 const updateData = {
                     ...updates,
-                    updated_at: new Date()
+                    updatedAt: new Date()
                 };
                 
                 delete updateData.id;
@@ -701,7 +701,7 @@ class RenterController {
                 .where('id', id)
                 .update({
                     status: 'deleted',
-                    updated_at: new Date()
+                    updatedAt: new Date()
                 });
             
             return res.json({

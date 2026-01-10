@@ -11,6 +11,8 @@ class FlatController {
     this.removeRenter = this.removeRenter.bind(this);
     this.checkFlatAccess = this.checkFlatAccess.bind(this);
     this.getFlatDetails = this.getFlatDetails.bind(this);
+    this.applyAdvancePayment = this.applyAdvancePayment.bind(this);
+    this.getFlatAdvancePayments = this.getFlatAdvancePayments.bind(this);
   }
   // 1. Create flat (with flatCount limit check)
   async createFlat(req, res) {
@@ -850,6 +852,7 @@ class FlatController {
               renterId: renter_id,
               nextDueDate: dueDate,
               totalRent: totalRent,
+              nextPaymentDate: next_payment_date || dueDate.toISOString().split('T')[0],
               advancePayments: advance_payments || [],
               breakdown: {
                 baseRent: baseRent,

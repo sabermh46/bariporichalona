@@ -169,7 +169,7 @@ model flat {
   rent_due_date       DateTime?
   should_pay_rent_day Int               @default(10)
   house_id            BigInt
-  renter_id           BigInt?           @unique
+  renter_id           BigInt?
   house               house             @relation(fields: [house_id], references: [id])
   renter              renter?           @relation(fields: [renter_id], references: [id])
   notice              notice[]
@@ -379,7 +379,7 @@ model renter {
   createdBy        BigInt?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime
-  flat             flat?
+  flat             flat[]
   rent_payments    rent_payment[]
   user             user?             @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
   advance_payments advance_payment[]

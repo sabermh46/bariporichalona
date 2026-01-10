@@ -6,6 +6,7 @@ const FinancialController = require('../controllers/finantial.controller');
 const authMiddleware = require('../middleware/auth.middleware');
 const roleMiddleware = require('../middleware/role.middleware');
 const { checkHouseAccess, checkCaretakerHousePermission } = require('../middleware/caretakerPermission.middleware');
+const db = require('../config/knex');
 
 // Flat Management Routes
 router.get('/houses/:houseId/flats',

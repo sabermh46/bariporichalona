@@ -165,7 +165,6 @@ CREATE TABLE `flat` (
     `next_payment_date` DATETIME(3) NULL,
 
     UNIQUE INDEX `Flat_uuid_key`(`uuid`),
-    UNIQUE INDEX `flat_renter_id_key`(`renter_id`),
     INDEX `idx_flat_house_id`(`house_id`),
     INDEX `idx_flat_renter_id`(`renter_id`),
     PRIMARY KEY (`id`)

@@ -79,6 +79,7 @@ app.use('/', financialRoutes);
 app.use('/', flatRoutes)
 app.use('/', renterRoutes);
 app.use('/caretakers', caretakerRoutes);
+app.use('/house-owner-analytics', require('./src/routes/houseOwnerAnalytics.routes'));
 
 //write a running status endpoint at '/'
 app.get("/", (req, res) => {
