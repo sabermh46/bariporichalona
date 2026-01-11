@@ -4,13 +4,13 @@ const db = require("../config/knex");
 class CaretakerPermissionService {
   /**
    * Check if a caretaker has permission for a specific house
-   * @param {number} caretakerId - The caretaker user ID
-   * @param {number} houseId - The house ID
-   * @param {string} permissionKey - The permission key to check
-   * @returns {boolean} - Whether the caretaker has permission
    */
   async hasCaretakerPermission(caretakerId, houseId, permissionKey) {
     try {
+      if (!caretakerId || !houseId || !permissionKey) {
+        throw new Error('Missing required parameters caretakerId, houseId, or permissionKey');
+      }
+
       // Check if user is assigned as caretaker to this house
       const assignment = await db('caretakerassignment as ca')
         .where('ca.caretakerId', caretakerId)
@@ -35,18 +35,20 @@ class CaretakerPermissionService {
       
       return !!hasPermission;
     } catch (error) {
-      console.error('Error checking caretaker permission:', error);
+      console.error('Error checking caretaker permission:', error.message);
       return false;
     }
   }
 
   /**
    * Get all houses where a caretaker is assigned
-   * @param {number} caretakerId - The caretaker user ID
-   * @returns {Array} - Array of house IDs
    */
   async getCaretakerHouses(caretakerId) {
     try {
+      if (!caretakerId) {
+        throw new Error('Missing caretakerId parameter');
+      }
+
       const assignments = await db('caretakerassignment as ca')
         .where('ca.caretakerId', caretakerId)
         .andWhere(function() {
@@ -55,21 +57,22 @@ class CaretakerPermissionService {
         })
         .select('ca.houseId');
       
-      return assignments.map(a => a.houseId);
+      return assignments.map(a => parseInt(a.houseId));
     } catch (error) {
-      console.error('Error getting caretaker houses:', error);
+      console.error('Error getting caretaker houses:', error.message);
       return [];
     }
   }
 
   /**
    * Get all permissions for a caretaker in a specific house
-   * @param {number} caretakerId - The caretaker user ID
-   * @param {number} houseId - The house ID
-   * @returns {Array} - Array of permission keys
    */
   async getCaretakerHousePermissions(caretakerId, houseId) {
     try {
+      if (!caretakerId || !houseId) {
+        throw new Error('Missing required parameters');
+      }
+
       const assignment = await db('caretakerassignment as ca')
         .where('ca.caretakerId', caretakerId)
         .where('ca.houseId', houseId)
@@ -91,63 +94,83 @@ class CaretakerPermissionService {
       
       return permissions.map(p => p.key);
     } catch (error) {
-      console.error('Error getting caretaker permissions:', error);
+      console.error('Error getting caretaker permissions:', error.message);
       return [];
     }
   }
 
   /**
-   * Check if user has any permission for a house (combines staff and caretaker permissions)
-   * @param {Object} user - The user object
-   * @param {number} houseId - The house ID
-   * @param {string} permissionKey - The permission key to check
-   * @returns {boolean} - Whether the user has permission
+   * Check if user has any permission for a house
    */
   async hasHousePermission(user, houseId, permissionKey) {
-    const PermissionService = require("./permission.service");
-    
-    // For non-caretakers, use the existing permission service
-    if (user.role.slug !== 'caretaker') {
-      return await PermissionService.hasPermission(user.id, permissionKey);
+    try {
+      if (!user || !houseId || !permissionKey) {
+        throw new Error('Missing required parameters');
+      }
+
+      const PermissionService = require("./permission.service");
+      
+      // For non-caretakers, use the existing permission service
+      if (user.role.slug !== 'caretaker') {
+        return await PermissionService.hasPermission(user.id, permissionKey);
+      }
+      
+      // For caretakers, check caretaker-specific permissions
+      return await this.hasCaretakerPermission(user.id, houseId, permissionKey);
+    } catch (error) {
+      console.error('Error checking house permission:', error.message);
+      return false;
     }
-    
-    // For caretakers, check caretaker-specific permissions
-    return await this.hasCaretakerPermission(user.id, houseId, permissionKey);
   }
 
   /**
    * Get all houses a user can access based on their role and permissions
-   * @param {Object} user - The user object
-   * @returns {Array} - Array of house IDs
    */
   async getAccessibleHouses(user) {
-    if (user.role.slug === 'web_owner') {
-      // Web owner can access all houses
-      const houses = await db('house').select('id');
-      return houses.map(h => h.id);
-    } else if (user.role.slug === 'house_owner') {
-      // House owner can access their own houses
-      const houses = await db('house')
-        .where('ownerId', user.id)
-        .select('id');
-      return houses.map(h => h.id);
-    } else if (user.role.slug === 'staff') {
-      // Staff can access houses of owners they manage
-      const managedOwners = await this.getManagedUsers(user.id, 'house_owner');
-      const ownerIds = managedOwners.map(o => o.id);
+    try {
+      if (!user || !user.role || !user.id) {
+        throw new Error('Invalid user object');
+      }
+
+      if (user.role.slug === 'web_owner') {
+        // Web owner can access all houses
+        const houses = await db('house').select('id');
+        return houses.map(h => parseInt(h.id));
+      } else if (user.role.slug === 'house_owner') {
+        // House owner can access their own houses
+        const houses = await db('house')
+          .where('ownerId', user.id)
+          .select('id');
+        return houses.map(h => parseInt(h.id));
+      } else if (user.role.slug === 'staff') {
+        // Staff can access houses of owners they manage
+        // Get house_owner role
+        const houseOwnerRole = await db('role').where('slug', 'house_owner').first();
+        if (!houseOwnerRole) return [];
+        
+        // Get users managed by this staff
+        const managedUsers = await db('user')
+          .where('parentId', user.id)
+          .where('roleId', houseOwnerRole.id)
+          .select('id');
+        
+        const ownerIds = managedUsers.map(u => u.id);
+        if (ownerIds.length === 0) return [];
+        
+        const houses = await db('house')
+          .whereIn('ownerId', ownerIds)
+          .select('id');
+        return houses.map(h => parseInt(h.id));
+      } else if (user.role.slug === 'caretaker') {
+        // Caretaker can access houses where they are assigned
+        return await this.getCaretakerHouses(user.id);
+      }
       
-      if (ownerIds.length === 0) return [];
-      
-      const houses = await db('house')
-        .whereIn('ownerId', ownerIds)
-        .select('id');
-      return houses.map(h => h.id);
-    } else if (user.role.slug === 'caretaker') {
-      // Caretaker can access houses where they are assigned
-      return this.getCaretakerHouses(user.id);
+      return [];
+    } catch (error) {
+      console.error('Error getting accessible houses:', error.message);
+      return [];
     }
-    
-    return [];
   }
 }
 
