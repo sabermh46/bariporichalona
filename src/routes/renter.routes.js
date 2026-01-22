@@ -10,7 +10,7 @@ const multipartHandler = require('../middleware/multipartHandler');
 // Create renter (with file upload)
 router.post('/renters',
     authMiddleware,
-    roleMiddleware(['web_owner', 'house_owner', 'staff']),
+    roleMiddleware(['web_owner', 'house_owner', 'staff', 'caretaker']),
     multipartHandler(),
     RenterController.createRenter
 );
@@ -18,7 +18,7 @@ router.post('/renters',
 // Get renters with filters
 router.get('/renters',
     authMiddleware,
-    roleMiddleware(['web_owner', 'house_owner', 'staff']),
+    roleMiddleware(['web_owner', 'house_owner', 'staff', 'caretaker']),
     RenterController.getRenters
 );
 
@@ -32,7 +32,7 @@ router.get('/renters/available',
 // Get renter details
 router.get('/renters/:id',
     authMiddleware,
-    roleMiddleware(['web_owner', 'house_owner', 'staff']),
+    roleMiddleware(['web_owner', 'house_owner', 'staff', 'caretaker']),
     RenterController.getRenterDetails
 );
 

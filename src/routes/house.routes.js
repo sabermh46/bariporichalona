@@ -5,6 +5,7 @@ const HouseController = require('../controllers/house.controller');
 const PermissionService = require('../services/permission.service');
 const db = require('../config/knex');
 const { checkHouseAccess } = require('../middleware/caretakerPermission.middleware');
+const rentController = require('../controllers/rent.controller');
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
@@ -138,30 +139,33 @@ router.delete('/:id', async (req, res, next) => {
 // Get managed house owners (for staff)
 router.get('/owners/managed', async (req, res, next) => {
     try {
-
-        const managedOwners = await HouseController.getManagedUsers(
-            req.user.id, 
-            'house_owner'
-        );
+        const { search, page = 1, limit = 20 } = req.query;
+        const userId = req.user.id;
+        const userRole = req.user.role?.slug;
         
+        // For staff, check permission first
+        if (userRole === 'staff') {
+            const hasPerm = await hasPermission(userId, 'houses.view');
+            if (!hasPerm) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Permission denied'
+                });
+            }
+        }
         
-        const formattedOwners = managedOwners.map(owner => ({
-            id: owner.id,
-            name: owner.name,
-            email: owner.email,
-            phone: owner.phone,
-            houseCount: owner.metadata?.totalHouses || 0,
-            createdAt: owner.createdAt
-        }));
-
+        const result = await rentController.getHouseOwners(req.user, search, parseInt(page), parseInt(limit));
+        
         res.json({
             success: true,
-            data: formattedOwners
+            data: result.data,
+            meta: result.meta
         });
     } catch (error) {
         next(error);
     }
 });
+
 
 // Get house flats
 // router.get('/:id/flats', async (req, res, next) => {

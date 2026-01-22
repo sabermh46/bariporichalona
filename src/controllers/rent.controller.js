@@ -122,9 +122,9 @@ class RenterController {
                 // House owner creates renter for themselves
                 createdByUserId = userId;
             }
-            else if (userRole === 'staff') {
+            else if (userRole === 'staff' || userRole === 'caretaker') {
                 // Staff needs permission and houseOwnerId
-                const hasCreatePermission = await hasPermission(userId, 'renter.create');
+                const hasCreatePermission = await hasPermission(userId, 'renters.create');
                 if (!hasCreatePermission) {
                     return res.status(403).json({
                         success: false,
@@ -135,20 +135,31 @@ class RenterController {
                 if (!houseOwnerId) {
                     return res.status(400).json({
                         success: false,
-                        error: 'houseOwnerId is required for staff'
+                        error: 'houseOwnerId is required for staff or caretaker'
                     });
                 }
+
+                let hOId = houseOwnerId;
+
+                //check if valid houseOwnerId then if it is string then convert to number
+                if (typeof houseOwnerId === 'string') {
+                    hOId = parseInt(houseOwnerId, 10);
+                }
                 
-                createdByUserId = houseOwnerId;
+                createdByUserId = hOId;                
                 
                 // Verify staff has access to this house owner
                 // Staff can only create renters for house owners they work with
-                const canAccessHouseOwner = await this.checkStaffAccess(userId, houseOwnerId);
-                if (!canAccessHouseOwner) {
-                    return res.status(403).json({
-                        success: false,
-                        error: 'You do not have access to this house owner'
-                    });
+                if(userRole === 'caretaker') {
+                    const accessibleOwners = await this.getAccessibleHouseOwners(userId);
+                    console.log("Acc", accessibleOwners);
+                    
+                    if (!accessibleOwners.includes(hOId)) {
+                        return res.status(403).json({
+                            success: false,
+                            error: 'You do not have permission to create renters for this house owner'
+                        });
+                    }
                 }
             }
             else {
@@ -283,6 +294,7 @@ class RenterController {
             
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
+            const permissions = req.user?.permissions || [];
             const offset = (page - 1) * limit;
             
             // Start building query
@@ -299,7 +311,7 @@ class RenterController {
                 console.log("it is web owner");
             } 
             if(userRole === 'staff') {
-                const hasPerm = await hasPermission(userId, 'renter.view');
+                const hasPerm = permissions.some(perm => perm === 'renters.view');
                 if (hasPerm) {
                     return res.status(403).json({
                         success: false,
@@ -319,22 +331,21 @@ class RenterController {
                 query.where('renter.createdBy', userId);
             }
             else if (userRole === 'caretaker') {
-                // First, check if they have the global permission to view renters
-                const hasViewPermission = await hasPermission(userId, 'renter.view');
-                if (hasViewPermission) {
-                    // Staff/Caretaker with global permission can see renters from houses they manage
-                    const accessibleHouseOwners = await this.getAccessibleHouseOwners(userId);
-                    if (accessibleHouseOwners.length > 0) {
-                        query.whereIn('renter.createdBy', accessibleHouseOwners);
-                    } else {
-                        // No access to any house owner, return empty
-                        query.where('1', '0');
-                    }
-                } else {
+                const hasViewPermission = permissions.some(perm => perm === 'renters.view'); // singular, not 'renters'
+                if (!hasViewPermission) { // fix condition - should be !hasViewPermission
                     return res.status(403).json({
                         success: false,
                         error: 'You do not have permission to view renters'
                     });
+                }
+                
+                const accessibleHouseOwners = await this.getAccessibleHouseOwners(userId);
+                console.log(accessibleHouseOwners);
+                
+                if (accessibleHouseOwners.length > 0) {
+                    query.whereIn('renter.createdBy', accessibleHouseOwners);
+                } else {
+                    query.where('1', '0');
                 }
             }
             
@@ -422,6 +433,173 @@ class RenterController {
                 error: 'Failed to fetch renters'
             });
         }
+    }
+
+    // In your Controller class
+    async getHouseOwners(currentUser, search = '', page = 1, limit = 20) {
+        const { id: userId, role: cRole } = currentUser;
+        const userRole = cRole?.slug;
+        const offset = (page - 1) * limit;
+        
+        
+        // Base query for house owners (users with house_owner role)
+        let query = db('user as u')
+            .join('role as r', 'u.roleId', 'r.id')
+            .where('r.slug', 'house_owner')
+            .select(
+                'u.id',
+                'u.uuid',
+                'u.name',
+                'u.email',
+                'u.phone',
+                'u.avatarUrl',
+                'u.status',
+                'u.createdAt'
+            );
+        
+        // Apply role-based filtering
+        if (userRole === 'web_owner') {
+            // Web owners see all house owners
+            // No additional filtering needed
+        } else if (userRole === 'staff') {
+            // Staff need houses.view permission
+            const hasPerm = await hasPermission(userId, 'houses.view');
+            if (!hasPerm) {
+                return { data: [], meta: { page, limit, total: 0, totalPages: 0 } };
+            }
+            // Staff see all house owners (same as web owner)
+        } else if (userRole === 'caretaker') {
+            // Caretakers only see their assigned house owners
+            const accessibleOwners = await this.getAccessibleHouseOwners(userId);
+
+            console.log("Accessible owners:", accessibleOwners);
+            
+            if (accessibleOwners.length === 0) {
+                return { data: [], meta: { page, limit, total: 0, totalPages: 0 } };
+            }
+            query.whereIn('u.id', accessibleOwners);
+        }
+        
+        // Apply search
+        if (search) {
+            query.andWhere(function() {
+                this.where('u.name', 'like', `%${search}%`)
+                    .orWhere('u.email', 'like', `%${search}%`)
+                    .orWhere('u.phone', 'like', `%${search}%`);
+            });
+        }
+        
+        // Get total count
+        const countQuery = query.clone().count('u.id as count').first();
+        const totalResult = await countQuery;
+        const total = parseInt(totalResult.count);
+        
+        // Get paginated results
+        const houseOwners = await query
+            .limit(limit)
+            .offset(offset)
+            .orderBy('u.createdAt', 'desc');
+        
+        // Fetch additional data for each house owner
+        const enrichedOwners = await Promise.all(
+            houseOwners.map(async (owner) => {
+                // Get houses with flat counts
+                const houses = await db('house as h')
+                    .where('h.ownerId', owner.id)
+                    .select(
+                        'h.id',
+                        'h.uuid',
+                        'h.name',
+                        'h.address',
+                        'h.active',
+                        'h.createdAt',
+                        db.raw('COUNT(DISTINCT f.id) as flatCount')
+                    )
+                    .leftJoin('flat as f', 'h.id', 'f.house_id')
+                    .groupBy('h.id');
+                
+                // Get app fee payments
+                const appFeePayments = await db('app_fee_payment as afp')
+                    .join('house as h', 'afp.house_id', 'h.id')
+                    .where('afp.house_owner_id', owner.id)
+                    .select(
+                        'afp.*',
+                        'h.name as houseName',
+                        'h.uuid as houseUuid'
+                    )
+                    .orderBy('afp.due_date', 'desc')
+                    .limit(10); // Limit to recent payments
+                
+                // Get flat details for each house
+                const housesWithFlats = await Promise.all(
+                    houses.map(async (house) => {
+                        const flats = await db('flat as f')
+                            .leftJoin('renter as r', 'f.renter_id', 'r.id')
+                            .where('f.house_id', house.id)
+                            .select(
+                                'f.id',
+                                'f.uuid',
+                                'f.name',
+                                'f.number',
+                                'f.floor',
+                                'f.rent_amount',
+                                'f.rent_due_date',
+                                'r.name as renterName',
+                                'r.status as renterStatus'
+                            )
+                            .orderBy('f.floor', 'asc')
+                            .orderBy('f.number', 'asc');
+                        
+                        return {
+                            ...house,
+                            flats
+                        };
+                    })
+                );
+                
+                return {
+                    ...owner,
+                    houseCount: houses.length,
+                    houses: housesWithFlats,
+                    appFeePayments
+                };
+            })
+        );
+        
+        return {
+            data: enrichedOwners,
+            meta: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        };
+    }
+
+    // Optimized function with memoization for caretakers
+    async checkMyHouseOwners(caretakerId) {
+        // Simple memoization (5 minute cache)
+        const cacheKey = `caretaker_owners_${caretakerId}`;
+        const cached = global.caretakerOwnersCache?.[cacheKey];
+        
+        if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
+            return cached.data;
+        }
+        
+        const owners = await this.getAccessibleHouseOwners(caretakerId);
+        
+        // Initialize cache if needed
+        if (!global.caretakerOwnersCache) {
+            global.caretakerOwnersCache = {};
+        }
+        
+        global.caretakerOwnersCache[cacheKey] = {
+            data: owners,
+            timestamp: Date.now()
+        };
+        
+        return owners;
     }
     
     // 3. Get renter details
@@ -810,17 +988,23 @@ class RenterController {
     }
     
     // Helper method to get accessible house owners for staff
-    async getAccessibleHouseOwners(staffId) {
+    async getAccessibleHouseOwners(caretakerId) {
+        console.log(caretakerId);
+        
         try {
             const assignments = await db('caretakerassignment')
                 .join('house', 'caretakerassignment.houseId', 'house.id')
-                .where('caretakerassignment.caretakerId', staffId)
-                .andWhere('caretakerassignment.expiresAt', '>', new Date())
+                .where('caretakerassignment.caretakerId', caretakerId)
+                .andWhere(function() {
+                    this.where('caretakerassignment.expiresAt', '>', new Date())
+                        .orWhereNull('caretakerassignment.expiresAt')
+                })
                 .distinct('house.ownerId')
                 .pluck('house.ownerId');
             
             return assignments;
         } catch (error) {
+            console.error(error); // Log the error for debugging
             return [];
         }
     }
@@ -835,9 +1019,9 @@ class RenterController {
             return renter.createdBy === userId;
         }
         
-        if (userRole === 'staff') {
+        if (userRole === 'staff' || userRole === 'caretaker') {
             // Check if staff has access to the house owner who created this renter
-            const hasPerm = await hasPermission(userId, 'renter.view');
+            const hasPerm = await hasPermission(userId, 'renters.view');
             if (!hasPerm) {
                 return false;
             }

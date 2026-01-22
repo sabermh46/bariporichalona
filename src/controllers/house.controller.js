@@ -15,8 +15,6 @@ class HouseController {
     this.assignRenterToFlat = this.assignRenterToFlat.bind(this);
     this.removeRenterFromFlat = this.removeRenterFromFlat.bind(this);
     this.getFlatWithRenter = this.getFlatWithRenter.bind(this);
-    this.checkUserHierarchy = this.checkUserHierarchy.bind(this);
-    this.getManagedUsers = this.getManagedUsers.bind(this);
     this.updateHouse = this.updateHouse.bind(this);
 
   }
@@ -705,48 +703,6 @@ class HouseController {
     }
   }
 
-  // Helper: Check user hierarchy (staff managing house owner)
-  async checkUserHierarchy(parentId, childId) {
-    const child = await db("user").where("id", childId).first();
-
-    if (!child) return false;
-    if (child.parentId === parentId) return true;
-    if (!child.parentId) return false;
-
-    return this.checkUserHierarchy(parentId, child.parentId);
-  }
-
-  // Helper: Get managed users
-  async getManagedUsers(userId, roleFilter = null) {
-    const user = await db("user as u")
-      .where("u.id", userId)
-      .leftJoin("role as r", "u.roleId", "r.id")
-      .select("u.*", "r.slug as role_slug")
-      .first();
-
-    if (!user) return [];
-
-    let query = db("user as u")
-      .leftJoin("role as r", "u.roleId", "r.id")
-      .select("u.*", "r.slug as role_slug", "r.name as role_name");
-
-    if (roleFilter) {
-      query = query.where("r.slug", roleFilter);
-    }
-
-    const allUsers = await query;
-
-    // Filter users who are under this user's management
-    const managedUsers = [];
-    for (const targetUser of allUsers) {
-      const isManaged = await this.checkUserHierarchy(userId, targetUser.id);
-      if (isManaged) {
-        managedUsers.push(targetUser);
-      }
-    }
-
-    return managedUsers;
-  }
 
   // Get all houses with pagination and filters
   async getHouses(req, res) {

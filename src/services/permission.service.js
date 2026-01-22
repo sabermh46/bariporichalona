@@ -93,7 +93,7 @@ class PermissionService {
 
   // Check if user has specific permission (with caching)
   async hasPermission(userId, permissionKey) {
-    const permissions = await this.getUserPermissions(userId);
+    const permissions = await this.getUserPermissions(userId);    
     return permissions.includes(permissionKey);
   }
 

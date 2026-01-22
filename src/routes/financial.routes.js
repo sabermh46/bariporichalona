@@ -116,7 +116,7 @@ router.post('/payments/rent',
 
 router.get('/payments/app-fee',
     authMiddleware,
-    roleMiddleware(['web_owner']), // Only web owner
+    roleMiddleware(['web_owner', 'staff']), // Only web owner
     async (req, res) => {
         const { status, houseOwnerId } = req.query;
         let query = db('app_fee_payment').select('*');

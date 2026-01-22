@@ -871,8 +871,7 @@ class FinancialController {
         transaction_id,
       } = req.body;
       const userId = req.user.id;
-
-      // Only web_owner can record app fee payments
+      
       if (
         req.user.role.slug === "caretaker" ||
         req.user.role.slug === "house_owner"
