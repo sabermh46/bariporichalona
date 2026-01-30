@@ -19,11 +19,14 @@ class HouseOwnerAnalyticsService {
     }
 
     try {
+      // const dashboardData = await this.getHouseOwnerDashboardFallback(userId);
       const dashboardData = await this.workerPool.execute('houseOwnerDashboard', {
         houseOwnerId: userId,
         months: 12
       });
 
+      // console.log(dashboardData);
+      
       // Cache the result
       this.cache.set(cacheKey, {
         data: dashboardData,
@@ -57,6 +60,14 @@ class HouseOwnerAnalyticsService {
       .whereIn('flat.house_id', houseIds)
       .count('* as count')
       .first();
+
+    //get cartetaker count for this house owner
+
+    const assignedCaretakers = await db('caretakerassignment as ca')
+      .whereIn('ca.houseId', houseIds)
+      .countDistinct('ca.caretakerId as count')
+      .first();
+      
     
     return {
       summary: {
@@ -68,7 +79,7 @@ class HouseOwnerAnalyticsService {
         occupiedFlats: parseInt(occupiedFlats?.count || 0),
         totalRenters: parseInt(totalRenters?.count || 0),
         activeRenters: parseInt(totalRenters?.count || 0),
-        assignedCaretakers: 0
+        assignedCaretakers: parseInt(assignedCaretakers?.count || 0)
       },
       rentCollectionProgress: [],
       upcomingPayments: [],

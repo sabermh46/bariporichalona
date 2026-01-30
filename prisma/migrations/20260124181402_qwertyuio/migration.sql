@@ -84,7 +84,7 @@ CREATE TABLE `house_expense` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `uuid` VARCHAR(36) NULL,
     `house_id` BIGINT NOT NULL,
-    `category` ENUM('maintenance', 'utility', 'repair', 'tax', 'salary', 'other') NOT NULL,
+    `category` ENUM('maintenance', 'utility', 'repair', 'tax', 'loan', 'salary', 'other') NOT NULL,
     `amount` DECIMAL(10, 2) NOT NULL,
     `description` TEXT NULL,
     `expense_date` DATE NOT NULL,
@@ -121,10 +121,17 @@ CREATE TABLE `app_fee_payment` (
     `metadata` LONGTEXT NULL,
     `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
     `updated_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+    `deleted_at` TIMESTAMP(0) NULL,
+    `notes` TEXT NULL,
+    `verified_by` BIGINT NULL,
+    `verified_at` TIMESTAMP(0) NULL,
 
     UNIQUE INDEX `app_fee_payment_uuid_key`(`uuid`),
     INDEX `app_fee_payment_house_id_fkey`(`house_id`),
     INDEX `app_fee_payment_house_owner_id_fkey`(`house_owner_id`),
+    INDEX `app_fee_payment_verified_by_fkey`(`verified_by`),
+    INDEX `app_fee_payment_deleted_at_idx`(`deleted_at`),
+    INDEX `app_fee_payment_created_at_idx`(`created_at`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -370,6 +377,7 @@ CREATE TABLE `renter` (
 
     UNIQUE INDEX `Renter_uuid_key`(`uuid`),
     INDEX `Renter_createdBy_fkey`(`createdBy`),
+    UNIQUE INDEX `unique_house_owner_email`(`createdBy`, `email`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -401,6 +409,45 @@ CREATE TABLE `rolelimit` (
 
     UNIQUE INDEX `RoleLimit_roleSlug_key`(`roleSlug`),
     INDEX `RoleLimit_roleSlug_idx`(`roleSlug`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `PasswordResetToken` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `token` VARCHAR(255) NOT NULL,
+    `userId` BIGINT NOT NULL,
+    `email` VARCHAR(255) NOT NULL,
+    `expiresAt` DATETIME(3) NOT NULL,
+    `used` BOOLEAN NOT NULL DEFAULT false,
+    `usedAt` DATETIME(3) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    UNIQUE INDEX `PasswordResetToken_token_key`(`token`),
+    INDEX `PasswordResetToken_userId_idx`(`userId`),
+    INDEX `PasswordResetToken_token_idx`(`token`),
+    INDEX `PasswordResetToken_expiresAt_idx`(`expiresAt`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `EmailLog` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `type` VARCHAR(50) NOT NULL,
+    `toEmail` VARCHAR(255) NOT NULL,
+    `subject` VARCHAR(255) NOT NULL,
+    `content` TEXT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'sent',
+    `error` VARCHAR(191) NULL,
+    `metadata` LONGTEXT NULL,
+    `sentAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `deliveredAt` DATETIME(3) NULL,
+    `openedAt` DATETIME(3) NULL,
+
+    INDEX `EmailLog_toEmail_idx`(`toEmail`),
+    INDEX `EmailLog_type_idx`(`type`),
+    INDEX `EmailLog_sentAt_idx`(`sentAt`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -520,6 +567,15 @@ CREATE TABLE `userloginas` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- CreateTable
+CREATE TABLE `_passwordresettoken_userIdTouser` (
+    `A` BIGINT NOT NULL,
+    `B` BIGINT NOT NULL,
+
+    UNIQUE INDEX `_passwordresettoken_userIdTouser_AB_unique`(`A`, `B`),
+    INDEX `_passwordresettoken_userIdTouser_B_index`(`B`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 -- AddForeignKey
 ALTER TABLE `caretakerassignment` ADD CONSTRAINT `CaretakerAssignment_caretakerId_fkey` FOREIGN KEY (`caretakerId`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -570,6 +626,9 @@ ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_house_id_fkey` FOR
 
 -- AddForeignKey
 ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_house_owner_id_fkey` FOREIGN KEY (`house_owner_id`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_verified_by_fkey` FOREIGN KEY (`verified_by`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `financial_report` ADD CONSTRAINT `financial_report_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -629,6 +688,9 @@ ALTER TABLE `registrationtoken` ADD CONSTRAINT `RegistrationToken_usedBy_fkey` F
 ALTER TABLE `renter` ADD CONSTRAINT `Renter_createdBy_fkey` FOREIGN KEY (`createdBy`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE `PasswordResetToken` ADD CONSTRAINT `PasswordResetToken_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `user`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE `rolepermission` ADD CONSTRAINT `RolePermission_permissionId_fkey` FOREIGN KEY (`permissionId`) REFERENCES `permission`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -660,3 +722,9 @@ ALTER TABLE `userloginas` ADD CONSTRAINT `UserLoginAs_targetUserId_fkey` FOREIGN
 
 -- AddForeignKey
 ALTER TABLE `userloginas` ADD CONSTRAINT `UserLoginAs_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `_passwordresettoken_userIdTouser` ADD CONSTRAINT `_passwordresettoken_userIdTouser_A_fkey` FOREIGN KEY (`A`) REFERENCES `PasswordResetToken`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `_passwordresettoken_userIdTouser` ADD CONSTRAINT `_passwordresettoken_userIdTouser_B_fkey` FOREIGN KEY (`B`) REFERENCES `user`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;

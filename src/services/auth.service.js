@@ -7,6 +7,7 @@ const { validateRegistrationData } = require("../utils/validateRegistrationData"
 const jwt = require("jsonwebtoken");
 const permissionService = require("./permission.service");
 const crypto = require("crypto");
+const emailService = require('./email.service');
 
 class AuthService {
   constructor() {
@@ -235,232 +236,310 @@ async generateRegistrationToken(creatorId, options = {}) {
     };
   }
 
-  async register(data, registrationToken = null) {
-    const {
-      email,
-      password,
-      name,
-      phone,
-      token: requestToken
-    } = data;
+  // Update the register function in auth.service.js
+  async register(data, registrationToken = null, externalRegistration = false, extData = {}) {
+      const {
+          email,
+          password,
+          name,
+          phone,
+          token: requestToken
+      } = data;
 
-    const validationErrors = validateRegistrationData(data);
-    if (validationErrors) {
-      throw new Error(validationErrors);
-    }
+      // Validate required fields
+      const validationErrors = validateRegistrationData(data);
+      if (validationErrors) {
+          throw new Error(validationErrors);
+      }
 
-    // Check if public registration is enabled
-    const publicRegistrationEnabled = await this.getSettings("registration.public_enabled", false);
-    if (!requestToken && !publicRegistrationEnabled) {
-      throw new Error("Public registration is disabled. Please use a registration token.");
-    }
+      // Get public registration setting
+      const publicRegistrationEnabled = await this.getSettings("registration.public_enabled", false);
+      
+      // Check if we can proceed without token
+      if (!requestToken && !publicRegistrationEnabled && !externalRegistration) {
+          throw new Error("Public registration is disabled. Please use a registration token.");
+      }
 
-    // Check existing user
-    const existingUser = await db('user')
-      .where({ email })
-      .leftJoin('role', 'user.roleId', 'role.id')
-      .select(
-        'user.*',
-        'role.name as role_name',
-        'role.slug as role_slug'
-      )
-      .first();
-
-    if (existingUser) {
-      if (existingUser.googleId && !existingUser.passwordHash) {
-        const { hash, salt } = await hashPassword(password);
-
-        await db('user')
-          .where({ id: existingUser.id })
-          .update({
-            passwordHash: hash,
-            salt: salt,
-            needsPasswordSetup: false,
-            name: name || existingUser.name,
-            phone: phone || existingUser.phone,
-            updatedAt: new Date()
-          });
-
-        const updatedUser = await db('user')
-          .where({ id: existingUser.id })
+      // Check existing user
+      const existingUser = await db('user')
+          .where({ email })
           .leftJoin('role', 'user.roleId', 'role.id')
           .select(
-            'user.*',
-            'role.name as role_name',
-            'role.slug as role_slug'
+              'user.*',
+              'role.name as role_name',
+              'role.slug as role_slug'
           )
           .first();
 
-        const permissions = await permissionService.getUserPermissions(updatedUser.id);
-        const tokens = await createTokens(updatedUser.id.toString());
+      if (existingUser) {
+          if (existingUser.googleId && !existingUser.passwordHash) {
+              const { hash, salt } = await hashPassword(password);
 
-        return {
-          user: updatedUser,
-          ...tokens,
-          permission: permissions
-        };
-      }
+              await db('user')
+                  .where({ id: existingUser.id })
+                  .update({
+                      passwordHash: hash,
+                      salt: salt,
+                      needsPasswordSetup: false,
+                      name: name || existingUser.name,
+                      phone: phone || existingUser.phone,
+                      updatedAt: new Date()
+                  });
 
-      throw new Error("User already exists");
-    }
+              const updatedUser = await db('user')
+                  .where({ id: existingUser.id })
+                  .leftJoin('role', 'user.roleId', 'role.id')
+                  .select(
+                      'user.*',
+                      'role.name as role_name',
+                      'role.slug as role_slug'
+                  )
+                  .first();
 
-    let roleSlug = await this.getSettings("registration.default_role", "caretaker");
-    let tokenData = null;
-    let createdBy = null;
-    let tokenMetaData = {};
+              const permissions = await permissionService.getUserPermissions(updatedUser.id);
+              const tokens = await createTokens(updatedUser.id.toString());
 
-    if (requestToken) {
-      tokenData = await this.validateRegistrationToken(requestToken);
-      roleSlug = tokenData.roleSlug;
-      createdBy = tokenData.createdBy;
-
-      if (tokenData.metadata) {
-        if (typeof tokenData.metadata === 'string') {
-          try {
-            tokenMetaData = JSON.parse(tokenData.metadata);
-          } catch (err) {
-            console.error('Error parsing token metadata:', err);
-            tokenMetaData = {};
+              return {
+                  user: updatedUser,
+                  ...tokens,
+                  permission: permissions
+              };
           }
-        } else if (typeof tokenData.metadata === 'object' && tokenData.metadata !== null) {
-          // Already an object, use it directly
-          tokenMetaData = tokenData.metadata;
-        }
+
+          throw new Error("User already exists");
       }
 
-      await db('registrationtoken')
-        .where({ id: tokenData.id })
-        .update({
-          used: true,
-          usedAt: new Date()
-        });
-    }
+      let roleSlug = await this.getSettings("registration.default_role", "caretaker");
+      let tokenData = null;
+      let createdBy = null;
+      let tokenMetaData = {};
 
-    const role = await db('role')
-      .where({ slug: roleSlug })
-      .first();
+      if (externalRegistration) {
+          // External registration - no token required
+          roleSlug = extData.roleSlug || roleSlug;
+          createdBy = extData.createdBy || null;
+          tokenMetaData = extData.metadata || {};
+          
+          // Validate that creator has permission to create this role
+          if (createdBy) {
+              const creator = await db('user')
+                  .where('id', createdBy)
+                  .leftJoin('role', 'user.roleId', 'role.id')
+                  .select('user.*', 'role.slug as creator_role_slug')
+                  .first();
+              
+              if (!creator) {
+                  throw new Error("Creator not found");
+              }
+              
+              // Check role hierarchy
+              const roleHierarchy = {
+                  'web_owner': 100,
+                  'staff': 80,
+                  'house_owner': 60,
+                  'caretaker': 40
+              };
 
-    if (!role) {
-      throw new Error(`Role ${roleSlug} not found`);
-    }
+              if (roleHierarchy[creator.creator_role_slug] <= roleHierarchy[roleSlug]) {
+                  throw new Error(`You cannot create ${roleSlug} accounts`);
+              }
+          }
+      } else if (requestToken) {
+          // Token-based registration
+          tokenData = await this.validateRegistrationToken(requestToken);
+          roleSlug = tokenData.roleSlug;
+          createdBy = tokenData.createdBy;
 
-    const { hash, salt } = await hashPassword(password);
+          if (tokenData.metadata) {
+              if (typeof tokenData.metadata === 'string') {
+                  try {
+                      tokenMetaData = JSON.parse(tokenData.metadata);
+                  } catch (err) {
+                      console.error('Error parsing token metadata:', err);
+                      tokenMetaData = {};
+                  }
+              } else if (typeof tokenData.metadata === 'object' && tokenData.metadata !== null) {
+                  tokenMetaData = tokenData.metadata;
+              }
+          }
 
-    return await db.transaction(async (trx) => {
-      const [userId] = await trx('user').insert({
-        uuid: uuidv4(),
-        email,
-        passwordHash: hash,
-        salt,
-        name,
-        phone: phone === "" ? null : phone,
-        needsPasswordSetup: false,
-        roleId: role.id,
-        parentId: createdBy || null,
-        locale: 'en',
-        status: 'active',
-        metadata: JSON.stringify({
-          registeredVia: requestToken ? 'token' : 'public',
-          registrationToken: requestToken || null,
-          registeredAt: new Date().toISOString()
-        }),
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
+          await db('registrationtoken')
+              .where({ id: tokenData.id })
+              .update({
+                  used: true,
+                  usedAt: new Date()
+              });
+      }
 
-      if (tokenData) {
-        await trx('registrationtoken')
-          .where({ id: tokenData.id })
-          .update({
-            usedBy: userId
+      const role = await db('role')
+          .where({ slug: roleSlug })
+          .first();
+
+      if (!role) {
+          throw new Error(`Role ${roleSlug} not found`);
+      }
+
+      const { hash, salt } = await hashPassword(password);
+
+      return await db.transaction(async (trx) => {
+          const [userId] = await trx('user').insert({
+              uuid: uuidv4(),
+              email,
+              passwordHash: hash,
+              salt,
+              name,
+              phone: phone === "" ? null : phone,
+              needsPasswordSetup: false,
+              roleId: role.id,
+              parentId: createdBy || null,
+              locale: 'en',
+              status: 'active',
+              metadata: JSON.stringify({
+                  registeredVia: externalRegistration ? 'external' : (requestToken ? 'token' : 'public'),
+                  registrationToken: requestToken || null,
+                  registeredAt: new Date().toISOString(),
+                  creator: createdBy ? { id: createdBy } : null
+              }),
+              createdAt: new Date(),
+              updatedAt: new Date()
           });
 
-          if(roleSlug === 'caretaker' && tokenMetaData.house_owner_id) {
-            const houseOwnerId = tokenMetaData.house_owner_id;
-            const houseIds = tokenMetaData.house_ids || [];
-
-            let houses = [];
-            if (houseIds.length > 0) {
-              houses = await trx('house')
-                .whereIn('id', houseIds)
-                .andWhere({ ownerId: houseOwnerId })
-                .select('id');
-            } else {
-              houses = await trx('house')
-                .where({ ownerId: houseOwnerId })
-                .select('id');
-            }
-
-            for (const house of houses) {
-              const [assignmentId] = await trx('caretakerassignment').insert({
-                uuid: uuidv4(),
-                houseId: house.id,
-                caretakerId: userId,
-                createdBy: houseOwnerId,
-                createdAt: new Date(),
-                expiresAt: null // No expiration by default
-              });
-              
-              // If default permissions are specified in metadata, add them
-              if (tokenMetaData.default_permissions && Array.isArray(tokenMetaData.default_permissions)) {
-                for (const permissionKey of tokenMetaData.default_permissions) {
-                  const permission = await trx('permission')
-                    .where({ key: permissionKey })
-                    .first();
-                  
-                  if (permission) {
-                    await trx('caretakerassignmentpermission').insert({
-                      caretakerAssignmentId: assignmentId,
-                      permissionId: permission.id,
-                      grantedBy: houseOwnerId,
-                      grantedAt: new Date()
-                    });
-                  }
-                }
-              }
-            }
-
+          if (tokenData && !externalRegistration) {
+              await trx('registrationtoken')
+                  .where({ id: tokenData.id })
+                  .update({
+                      usedBy: userId
+                  });
           }
 
-          
+          // Handle role-specific data
+          await this.handleRoleSpecificData(trx, roleSlug, userId, tokenMetaData, createdBy);
 
-      }
+          const user = await trx('user')
+              .where('user.id', userId)
+              .leftJoin('role', 'user.roleId', 'role.id')
+              .leftJoin('user as parent', 'user.parentId', 'parent.id')
+              .select(
+                  'user.*',
+                  'role.name as role_name',
+                  'role.slug as role_slug',
+                  'parent.id as parent_id',
+                  'parent.name as parent_name',
+                  'parent.email as parent_email'
+              )
+              .first();
 
-      const user = await trx('user')
-        .where('user.id', userId)
-        .leftJoin('role', 'user.roleId', 'role.id')
-        .leftJoin('user as parent', 'user.parentId', 'parent.id')
-        .select(
-          'user.*',
-          'role.name as role_name',
-          'role.slug as role_slug',
-          'parent.id as parent_id',
-          'parent.name as parent_name',
-          'parent.email as parent_email'
-        )
-        .first();
+          const tokens = await createTokens(user.id.toString());
 
-      const tokens = await createTokens(user.id.toString());
-
-      return {
-        user: {
-          ...user,
-          role: {
-            name: user.role_name,
-            slug: user.role_slug
-          },
-          parent: user.parent_id ? {
-            id: user.parent_id,
-            name: user.parent_name,
-            email: user.parent_email
-          } : null
-        },
-        ...tokens,
-        permission: [],
-        registrationMethod: requestToken ? 'token' : 'public'
-      };
-    });
+          return {
+              user: {
+                  ...user,
+                  role: {
+                      name: user.role_name,
+                      slug: user.role_slug
+                  },
+                  parent: user.parent_id ? {
+                      id: user.parent_id,
+                      name: user.parent_name,
+                      email: user.parent_email
+                  } : null
+              },
+              ...tokens,
+              permission: [],
+              registrationMethod: externalRegistration ? 'external' : (requestToken ? 'token' : 'public')
+          };
+      });
   }
+
+// Helper function to handle role-specific data
+async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
+    switch (roleSlug) {
+        case 'caretaker':
+            if (metadata.house_owner_id) {
+                const houseOwnerId = metadata.house_owner_id;
+                const houseIds = metadata.house_ids || [];
+
+                let houses = [];
+                if (houseIds.length > 0) {
+                    houses = await trx('house')
+                        .whereIn('id', houseIds)
+                        .andWhere({ ownerId: houseOwnerId })
+                        .select('id');
+                } else {
+                    houses = await trx('house')
+                        .where({ ownerId: houseOwnerId })
+                        .select('id');
+                }
+
+                for (const house of houses) {
+                    const [assignmentId] = await trx('caretakerassignment').insert({
+                        uuid: uuidv4(),
+                        houseId: house.id,
+                        caretakerId: userId,
+                        createdBy: houseOwnerId,
+                        createdAt: new Date(),
+                        expiresAt: metadata.expires_at ? new Date(metadata.expires_at) : null
+                    });
+                    
+                    if (metadata.default_permissions && Array.isArray(metadata.default_permissions)) {
+                        for (const permissionKey of metadata.default_permissions) {
+                            const permission = await trx('permission')
+                                .where({ key: permissionKey })
+                                .first();
+                            
+                            if (permission) {
+                                await trx('caretakerassignmentpermission').insert({
+                                    caretakerAssignmentId: assignmentId,
+                                    permissionId: permission.id,
+                                    grantedBy: houseOwnerId,
+                                    grantedAt: new Date()
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+
+        case 'staff':
+            // Staff might have default permissions
+            if (metadata.default_permissions && Array.isArray(metadata.default_permissions)) {
+                for (const permissionKey of metadata.default_permissions) {
+                    const permission = await trx('permission')
+                        .where({ key: permissionKey })
+                        .first();
+                    
+                    if (permission) {
+                        await trx('staffpermission').insert({
+                            userId: userId,
+                            permissionId: permission.id,
+                            grantedBy: createdBy || userId,
+                            grantedAt: new Date()
+                        });
+                    }
+                }
+            }
+            break;
+
+        case 'house_owner':
+            // House owner might have initial house data
+            if (metadata.initial_houses && Array.isArray(metadata.initial_houses)) {
+                for (const houseData of metadata.initial_houses) {
+                    const [houseId] = await trx('house').insert({
+                        uuid: uuidv4(),
+                        ownerId: userId,
+                        name: houseData.name || 'New House',
+                        address: houseData.address || '',
+                        active: houseData.active || true,
+                        metadata: JSON.stringify(houseData.metadata || {}),
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    });
+                }
+            }
+            break;
+    }
+}
 
   async createUserAccount(creatorId, userData, options = {}) {
     const {
@@ -630,96 +709,6 @@ async generateRegistrationToken(creatorId, options = {}) {
     });
   }
 
-  async loginAs(currentUserId, targetUserId, reason = 'Administrative Access') {
-    return await db.transaction(async (trx) => {
-      const currentUser = await trx('user')
-        .where({ id: currentUserId })
-        .leftJoin('role', 'user.roleId', 'role.id')
-        .select(
-          'user.*',
-          'role.id as role_id',
-          'role.slug as role_slug'
-        )
-        .first();
-
-      if (!currentUser) {
-        throw new Error("Current user not found");
-      }
-
-      const targetUser = await trx('user')
-        .where({ id: targetUserId })
-        .leftJoin('role', 'user.roleId', 'role.id')
-        .select(
-          'user.*',
-          'role.id as role_id',
-          'role.slug as role_slug'
-        )
-        .first();
-
-      if (!targetUser) {
-        throw new Error("Target user not found");
-      }
-
-      // Check permission
-      const roleLimits = await trx('rolelimit')
-        .where({ roleSlug: currentUser.role_slug })
-        .first();
-
-      if (!roleLimits || !roleLimits.canLoginAs) {
-        throw new Error("You do not have permission to login as other users");
-      }
-
-      const allowedRoles = roleLimits.canLoginAs ? JSON.parse(roleLimits.canLoginAs) : [];
-      if (!allowedRoles.includes(targetUser.role_slug)) {
-        throw new Error(`You do not have permission to login as ${targetUser.role_slug} users`);
-      }
-
-      // Check if target user is under current user's hierarchy
-      if (currentUser.role_slug !== 'web_owner') {
-        const isHierarchyValid = await this.checkUserHierarchy(currentUserId, targetUserId);
-        if (!isHierarchyValid) {
-          throw new Error("You can only login as users under your management hierarchy");
-        }
-      }
-
-      // Create login-as session
-      const [loginSessionId] = await trx('userloginas').insert({
-        userId: currentUserId,
-        targetUserId: targetUserId,
-        originalRoleId: currentUser.role_id,
-        reason: reason,
-        expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
-        createdAt: new Date()
-      });
-
-      const loginAsSession = await trx('userloginas as ula')
-        .where('ula.id', loginSessionId)
-        .leftJoin('user as target', 'ula.targetUserId', 'target.id')
-        .leftJoin('role as target_role', 'target.roleId', 'target_role.id')
-        .select(
-          'ula.*',
-          'target.id as target_id',
-          'target.email as target_email',
-          'target.name as target_name',
-          'target_role.slug as target_role_slug'
-        )
-        .first();
-
-      const tokens = await createTokens(targetUser.id.toString());
-
-      return {
-        ...tokens,
-        user: targetUser,
-        loginAsSession: {
-          id: loginAsSession.id,
-          originalUserId: currentUserId,
-          originalRole: { slug: currentUser.role_slug },
-          expiresAt: loginAsSession.expiresAt,
-          reason: loginAsSession.reason
-        }
-      };
-    });
-  }
 
   async checkUserHierarchy(parentId, childId) {
     const child = await db('user')
@@ -1199,6 +1188,346 @@ async generateRegistrationToken(creatorId, options = {}) {
       emailUserId: emailUser.id,
     };
   }
+
+  async forgotPassword(email) {
+      try {
+          // Find user by email
+          const user = await db('user')
+              .where('email', email)
+              .andWhere('status', 'active')
+              .first();
+
+          // Don't reveal if user exists for security
+          if (!user) {
+              return { success: true, message: 'If an account exists with this email, a reset link will be sent' };
+          }
+
+          // Check if user has password set
+          if (!user.passwordHash) {
+              // User registered via Google, no password set
+              return { 
+                  success: false, 
+                  error: 'This account uses Google authentication. Please sign in with Google.' 
+              };
+          }
+
+          // Check for existing valid reset tokens
+          const existingToken = await db('passwordresettoken')
+              .where('userId', user.id)
+              .andWhere('used', false)
+              .andWhere('expiresAt', '>', new Date())
+              .first();
+
+          if (existingToken) {
+              return { 
+                  success: true, 
+                  message: 'A password reset link has already been sent. Please check your email.' 
+              };
+          }
+
+          // Generate reset token
+          const token = crypto.randomBytes(32).toString('hex');
+          const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+          // Save reset token
+          await db('passwordresettoken').insert({
+              token,
+              userId: user.id,
+              email: user.email,
+              expiresAt,
+              createdAt: new Date(),
+              updatedAt: new Date()
+          });
+
+          // Send reset email
+          try {
+              await emailService.sendPasswordResetEmail(user.email, token, user.name);
+          } catch (emailError) {
+              console.error('Failed to send reset email:', emailError);
+              // Don't fail the request, just log it
+          }
+
+          return { 
+              success: true, 
+              message: 'If an account exists with this email, a reset link will be sent' 
+          };
+      } catch (error) {
+          console.error('Forgot password error:', error);
+          return { 
+              success: false, 
+              error: 'Failed to process password reset request' 
+          };
+      }
+  }
+
+  async resetPassword(token, newPassword) {
+      const trx = await db.transaction();
+      
+      try {
+          // Validate token
+          const resetToken = await trx('passwordresettoken')
+              .where('token', token)
+              .andWhere('used', false)
+              .andWhere('expiresAt', '>', new Date())
+              .first();
+
+          if (!resetToken) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: 'Invalid or expired reset token' 
+              };
+          }
+
+          // Get user
+          const user = await trx('user')
+              .where('id', resetToken.userId)
+              .andWhere('email', resetToken.email)
+              .andWhere('status', 'active')
+              .first();
+
+          if (!user) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: 'User not found or inactive' 
+              };
+          }
+
+          // Validate password strength
+          const passwordErrors = this.validatePassword(newPassword);
+          if (passwordErrors.length > 0) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: passwordErrors.join(', ') 
+              };
+          }
+
+          // Hash new password
+          const { hash, salt } = await hashPassword(newPassword);
+
+          // Update user password
+          await trx('user')
+              .where('id', user.id)
+              .update({
+                  passwordHash: hash,
+                  salt,
+                  needsPasswordSetup: false,
+                  updatedAt: new Date()
+              });
+
+          // Mark token as used
+          await trx('passwordresettoken')
+              .where('id', resetToken.id)
+              .update({
+                  used: true,
+                  usedAt: new Date(),
+                  updatedAt: new Date()
+              });
+
+          // Send password changed email
+          try {
+              await emailService.sendPasswordChangedEmail(user.email, user.name);
+          } catch (emailError) {
+              console.error('Failed to send password changed email:', emailError);
+          }
+
+          await trx.commit();
+
+          return { 
+              success: true, 
+              message: 'Password has been reset successfully' 
+          };
+      } catch (error) {
+          await trx.rollback();
+          console.error('Reset password error:', error);
+          return { 
+              success: false, 
+              error: 'Failed to reset password' 
+          };
+      }
+  }
+
+  async changePassword(userId, oldPassword, newPassword) {
+      const trx = await db.transaction();
+      
+      try {
+          // Get user with current password
+          const user = await trx('user')
+              .where('id', userId)
+              .andWhere('status', 'active')
+              .first();
+
+          if (!user) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: 'User not found' 
+              };
+          }
+
+          // Check if user has password (not Google-only account)
+          if (!user.passwordHash) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: 'This account uses Google authentication. To set a password, use "Forgot Password" first.' 
+              };
+          }
+
+          // Verify old password
+          const isValid = await verifyPassword(oldPassword, user.passwordHash);
+          if (!isValid) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: 'Current password is incorrect' 
+              };
+          }
+
+          // Check if new password is same as old
+          const isSame = await verifyPassword(newPassword, user.passwordHash);
+          if (isSame) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: 'New password must be different from current password' 
+              };
+          }
+
+          // Validate password strength
+          const passwordErrors = this.validatePassword(newPassword);
+          if (passwordErrors.length > 0) {
+              await trx.rollback();
+              return { 
+                  success: false, 
+                  error: passwordErrors.join(', ') 
+              };
+          }
+
+          // Hash new password
+          const { hash, salt } = await hashPassword(newPassword);
+
+          // Update user
+          await trx('user')
+              .where('id', userId)
+              .update({
+                  passwordHash: hash,
+                  salt,
+                  updatedAt: new Date()
+              });
+
+          // Send password changed email
+          try {
+              await emailService.sendPasswordChangedEmail(user.email, user.name);
+          } catch (emailError) {
+              console.error('Failed to send password changed email:', emailError);
+          }
+
+          await trx.commit();
+
+          return { 
+              success: true, 
+              message: 'Password changed successfully' 
+          };
+      } catch (error) {
+          await trx.rollback();
+          console.error('Change password error:', error);
+          return { 
+              success: false, 
+              error: 'Failed to change password' 
+          };
+      }
+  }
+
+  // Add password validation helper
+  validatePassword(password) {
+      const errors = [];
+      
+      if (!password) {
+          errors.push('Password is required');
+          return errors;
+      }
+
+      if (password.length < 8) {
+          errors.push('Password must be at least 8 characters');
+      }
+
+      if (!/[A-Z]/.test(password)) {
+          errors.push('Password must contain at least one uppercase letter');
+      }
+
+      if (!/[a-z]/.test(password)) {
+          errors.push('Password must contain at least one lowercase letter');
+      }
+
+      if (!/\d/.test(password)) {
+          errors.push('Password must contain at least one number');
+      }
+
+      if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+          errors.push('Password must contain at least one special character');
+      }
+
+      return errors;
+  }
+
+  // Add this to your auth.service.js
+
+  async hasPassword(userId) {
+      const user = await db('user')
+          .where('id', userId)
+          .select('passwordHash')
+          .first();
+      
+      return !!user?.passwordHash;
+  }
+
+  async setupPassword(userId, password) {
+      const trx = await db.transaction();
+      
+      try {
+          // Check if user already has password
+          const user = await trx('user')
+              .where('id', userId)
+              .first();
+          
+          if (user.passwordHash) {
+              await trx.rollback();
+              return { success: false, error: 'Password already set' };
+          }
+          
+          // Validate password
+          const passwordErrors = this.validatePassword(password);
+          if (passwordErrors.length > 0) {
+              await trx.rollback();
+              return { success: false, error: passwordErrors.join(', ') };
+          }
+          
+          // Hash password
+          const { hash, salt } = await hashPassword(password);
+          
+          // Update user
+          await trx('user')
+              .where('id', userId)
+              .update({
+                  passwordHash: hash,
+                  salt,
+                  needsPasswordSetup: false,
+                  updatedAt: new Date()
+              });
+          
+          await trx.commit();
+          
+          return { success: true, message: 'Password set successfully' };
+      } catch (error) {
+          await trx.rollback();
+          console.error('Setup password error:', error);
+          return { success: false, error: 'Failed to set password' };
+      }
+  }
+
 }
 
 module.exports = new AuthService();

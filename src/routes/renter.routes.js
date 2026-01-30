@@ -44,6 +44,15 @@ router.put('/renters/:id',
     RenterController.updateRenter
 );
 
+// Get potential duplicate renters (for web owner and staff with permission)
+router.get('/renters/potential-duplicates', async (req, res, next) => {
+    try {
+        await RenterController.findPotentialDuplicateRenters(req, res);
+    } catch (error) {
+        next(error);
+    }
+});
+
 // Delete renter (soft delete)
 router.delete('/renters/:id',
     authMiddleware,

@@ -2,6 +2,8 @@
 const db = require("../config/knex");
 const { v4: uuidv4 } = require("uuid");
 const { hasPermission } = require("../services/permission.service");
+const { getAccessibleHouseOwners } = require("./common/index");
+const CaretakerPermissionService = require("../services/CaretakerPermission.service");
 
 class FlatController {
   constructor() {
@@ -241,6 +243,8 @@ class FlatController {
     }
   }
 
+  
+
   // 2. Get flats with filters (vacant/occupied, houseId)
   async getFlats(req, res) {
     try {
@@ -248,6 +252,34 @@ class FlatController {
       const { status, search, page = 1, limit = 20 } = req.query;
       const userId = req.user.id;
       const offset = (page - 1) * limit;
+
+      if (req.user.role.slug === "caretaker") {
+        // Check if caretaker has access to the specified house
+        const availableHouseOwner = await getAccessibleHouseOwners(userId);
+        if (availableHouseOwner.length === 0) {
+          return res.status(403).json({
+            success: false,
+            error: "No accessible houses found for this caretaker",
+          });
+        } else {
+          const houseOwnerId = availableHouseOwner[0];
+          //get all houses for this owner
+          const houses = await db("house")
+            .where("ownerId", houseOwnerId)
+            .andWhere("active", true)
+            .select("id");
+            console.log('houses: ' , houses);
+
+          const houseIds = houses.map((h) => h.id);
+          if (house_id && !houseIds.includes(parseInt(house_id))) {
+            return res.status(403).json({
+              success: false,
+              error: "You do not have access to this house",
+            });
+          }
+            
+        }
+      }
 
       // Build base query
       let query = db("flat")
@@ -265,7 +297,7 @@ class FlatController {
         );
 
       // Apply permission filter - owner or caretaker
-      if (req.user.role.slug !== "web_owner") {
+      if (req.user.role.slug === "staff" || req.user.role.slug === "house_owner") {
         query.where(function () {
           this.where("house.ownerId", userId).orWhereExists(function () {
             this.select("*")
@@ -372,16 +404,21 @@ class FlatController {
           error: "Flat not found",
         });
       }
+      
 
       // Check permission
-      if (req.user.role.slug !== "web_owner") {
-        const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
-        if (!hasAccess) {
-          return res.status(403).json({
-            success: false,
-            error: "You do not have permission to view this flat",
-          });
-        }
+      if (req.user.role.slug === "caretaker") {
+        // Check if caretaker has access to the specified house
+        const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, flat?.house_id, 'flats.view');
+          
+
+          if (!hasPerm) {
+            return res.status(403).json({
+              success: false,
+              error: "You do not have access to this flat",
+            });
+
+          }
       }
 
       // Get payment history

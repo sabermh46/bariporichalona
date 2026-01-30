@@ -10,43 +10,43 @@ const db = require('../config/knex');
 // Flat Management Routes
 router.get('/houses/:houseId/flats',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.getFlats
 );
 
 router.post('/houses/:houseId/flats',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.createFlat
 );
 
 router.get('/flats/:id',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.getFlatDetails
 );
 
 router.put('/flats/:id',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.updateFlat
 );
 
 router.delete('/flats/:id',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.deleteFlat
 );
 
 router.post('/flats/:id/renter',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.assignRenter
 );
 
 router.delete('/flats/:id/renter',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.removeRenter
 );
 
@@ -71,28 +71,79 @@ router.post('/flats/:id/payments',
     FinancialController.recordRentPayment
 );
 
-router.get('/houses/:houseId/expenses',
+router.get('/houses/:houseOwnerId/expenses',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     async (req, res) => {
-        const { houseId } = req.params;
-        const expenses = await db('houseexpense')
-            .where('houseId', houseId)
-            .orderBy('expenseDate', 'desc')
-            .select('*');
-        res.json({ success: true, data: expenses });
+        try {
+            const { houseOwnerId } = req.params;
+            const { houseId } = req.query; // Typically comes from ?houseId=...
+
+            // 1. Get all valid house IDs owned by this user for security/filtering
+            const ownedHouseIds = await db('house')
+                .where('ownerId', houseOwnerId)
+                .pluck('id');
+
+            if (ownedHouseIds.length === 0) {
+                return res.json({ success: true, data: [], message: 'No houses found' });
+            }
+
+            // 2. Determine target IDs (either the specific house or all owned houses)
+            let targetHouseIds;
+            if (houseId) {
+                const hId = parseInt(houseId);
+                // Security check: Ensure the requested houseId belongs to the owner
+                if (!ownedHouseIds.includes(hId)) {
+                    return res.status(403).json({ success: false, message: 'Unauthorized house access' });
+                }
+                targetHouseIds = [hId];
+            } else {
+                targetHouseIds = ownedHouseIds;
+            }
+
+            // 3. Fetch expenses with rounding to fix the floating point issue
+            const expenses = await db('house_expense') // Use your actual table name
+                .whereIn('house_id', targetHouseIds)
+                .select(
+                    'id',
+                    'uuid',
+                    'house_id',
+                    'category',
+                    'description',
+                    db.raw('ROUND(amount, 2) as amount'), 
+                    'expense_date',
+                    'status',
+                    'payment_method',
+                    'created_at'
+                )
+                .orderBy('expense_date', 'desc');
+
+            const totalSum = expenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+            res.json({ 
+                success: true, 
+                data: expenses,
+                summary: {
+                    totalCount: expenses.length,
+                    totalAmount: parseFloat(totalSum.toFixed(2))
+                }
+            });
+
+        } catch (error) {
+            console.error('Error fetching expenses:', error);
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
     }
 );
 
 router.post('/houses/:houseId/expenses',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner','caretaker']),
     FinancialController.recordExpense
 );
 
 router.get('/payments/rent',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     async (req, res) => {
         const { status, houseId, startDate, endDate } = req.query;
         let query = db('rent_payment').select('*');
@@ -110,13 +161,13 @@ router.get('/payments/rent',
 
 router.post('/payments/rent',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FinancialController.recordRentPayment
 );
 
 router.get('/payments/app-fee',
     authMiddleware,
-    roleMiddleware(['web_owner', 'staff']), // Only web owner
+    roleMiddleware(['web_owner', 'staff', 'caretaker']), // Only web owner
     async (req, res) => {
         const { status, houseOwnerId } = req.query;
         let query = db('app_fee_payment').select('*');

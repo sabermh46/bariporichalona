@@ -132,11 +132,19 @@ model app_fee_payment {
   metadata       String?              @db.LongText
   created_at     DateTime?            @default(now()) @db.Timestamp(0)
   updated_at     DateTime?            @default(now()) @db.Timestamp(0)
+  deleted_at     DateTime?            @db.Timestamp(0) // Add for soft delete
+  notes          String?              @db.Text // Add for admin notes
+  verified_by    BigInt? // Who verified the payment
+  verified_at    DateTime?            @db.Timestamp(0) // When it was verified
   house          house                @relation(fields: [house_id], references: [id])
-  houseOwner     user                 @relation(fields: [house_owner_id], references: [id])
+  houseOwner     user                 @relation("AppFeePayment_houseOwner", fields: [house_owner_id], references: [id])
+  verifier       user?                @relation("AppFeePayment_verifier", fields: [verified_by], references: [id])
 
   @@index([house_id], map: "app_fee_payment_house_id_fkey")
   @@index([house_owner_id], map: "app_fee_payment_house_owner_id_fkey")
+  @@index([verified_by], map: "app_fee_payment_verified_by_fkey")
+  @@index([deleted_at], map: "app_fee_payment_deleted_at_idx")
+  @@index([created_at], map: "app_fee_payment_created_at_idx")
 }
 
 model financial_report {
@@ -384,6 +392,7 @@ model renter {
   user             user?             @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
   advance_payments advance_payment[]
 
+  @@unique([createdBy, email], map: "unique_house_owner_email") // Add this
   @@index([createdBy], map: "Renter_createdBy_fkey")
 }
 
@@ -411,6 +420,43 @@ model rolelimit {
   updatedAt     DateTime
 
   @@index([roleSlug], map: "RoleLimit_roleSlug_idx")
+}
+
+model PasswordResetToken {
+  id        BigInt    @id @default(autoincrement())
+  token     String    @unique @db.VarChar(255)
+  userId    BigInt
+  email     String    @db.VarChar(255)
+  expiresAt DateTime
+  used      Boolean   @default(false)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user  user   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  users user[] @relation("passwordresettoken_userIdTouser")
+
+  @@index([userId], map: "PasswordResetToken_userId_idx")
+  @@index([token], map: "PasswordResetToken_token_idx")
+  @@index([expiresAt], map: "PasswordResetToken_expiresAt_idx")
+}
+
+model EmailLog {
+  id          BigInt    @id @default(autoincrement())
+  type        String    @db.VarChar(50)
+  toEmail     String    @db.VarChar(255)
+  subject     String    @db.VarChar(255)
+  content     String?   @db.Text
+  status      String    @default("sent") @db.VarChar(20)
+  error       String?
+  metadata    String?   @db.LongText
+  sentAt      DateTime  @default(now())
+  deliveredAt DateTime?
+  openedAt    DateTime?
+
+  @@index([toEmail], map: "EmailLog_toEmail_idx")
+  @@index([type], map: "EmailLog_type_idx")
+  @@index([sentAt], map: "EmailLog_sentAt_idx")
 }
 
 model rolepermission {
@@ -493,7 +539,8 @@ model user {
   createdAt                                                 DateTime              @default(now())
   updatedAt                                                 DateTime
   deletedAt                                                 DateTime?
-  app_fee_payments                                          app_fee_payment[]
+  app_fee_payments_houseOwner                               app_fee_payment[]     @relation("AppFeePayment_houseOwner")
+  app_fee_payments_verified                                 app_fee_payment[]     @relation("AppFeePayment_verifier")
   caretakerassignment_caretakerassignment_caretakerIdTouser caretakerassignment[] @relation("caretakerassignment_caretakerIdTouser")
   caretakerassignment_caretakerassignment_createdByTouser   caretakerassignment[] @relation("caretakerassignment_createdByTouser")
   device                                                    device[]
@@ -518,8 +565,11 @@ model user {
   userloginas_userloginas_targetUserIdTouser                userloginas[]         @relation("userloginas_targetUserIdTouser")
   userloginas_userloginas_userIdTouser                      userloginas[]         @relation("userloginas_userIdTouser")
 
+  passwordresettoken_passwordresettoken_userIdTouser PasswordResetToken[] @relation("passwordresettoken_userIdTouser")
+
   caretakerassignmentpermission_caretakerassignmentpermission_grantedByTouser caretakerassignmentpermission[] @relation("caretakerassignmentpermission_grantedByTouser")
   caretakerassignmentpermission_caretakerassignmentpermission_revokedByTouser caretakerassignmentpermission[] @relation("caretakerassignmentpermission_revokedByTouser")
+  passwordResetTokens                                                         PasswordResetToken[]
 
   @@index([email], map: "User_email_idx")
   @@index([parentId], map: "User_parentId_fkey")
@@ -567,6 +617,7 @@ enum expense_category_enum {
   repair
   tax
   salary
+  loan
   other
 }
 

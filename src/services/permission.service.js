@@ -10,6 +10,10 @@ class PermissionService {
         this.hasPermission = this.hasPermission.bind(this);
         this.batchCheckPermissions = this.batchCheckPermissions.bind(this);
         this.hasAnyPermission = this.hasAnyPermission.bind(this);
+        this.canCreateRole = this.canCreateRole.bind(this);
+        this.getRolePermissions = this.getRolePermissions.bind(this);
+        this.getAllSystemPermissions = this.getAllSystemPermissions.bind(this);
+        
     }
   // Get user permissions with caching
   async getUserPermissions(userId) {
@@ -96,6 +100,17 @@ class PermissionService {
     const permissions = await this.getUserPermissions(userId);    
     return permissions.includes(permissionKey);
   }
+
+  async canCreateRole(creatorRoleSlug, targetRoleSlug) {
+        const roleHierarchy = {
+            'web_owner': 100,
+            'staff': 80,
+            'house_owner': 60,
+            'caretaker': 40
+        };
+        
+        return roleHierarchy[creatorRoleSlug] > roleHierarchy[targetRoleSlug];
+    }
 
   // Get all system permissions with caching
   async getAllSystemPermissions() {

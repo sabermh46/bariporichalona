@@ -182,7 +182,18 @@ async function main() {
           { key: "notifications.send", description: "Send notifications" },
           { key: "notifications.broadcast", description: "Send broadcast notifications" },
           { key: "notifications.templates.manage", description: "Manage notification templates" },
+        ],
+
+        app_fees: [
+          //create, view, verify, delete
+          { key: "app_fees.view", description: "View application fee payments" },
+          { key: "app_fees.verify", description: "Verify application fee payments" },
+          { key: "app_fees.delete", description: "Delete application fee payments" },
+          { key: "app_fees.create", description: "Create application fee payments" },
+          
         ]
+
+
       };
 
       // Create all permissions

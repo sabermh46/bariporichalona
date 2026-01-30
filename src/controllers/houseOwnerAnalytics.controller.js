@@ -1,18 +1,34 @@
 // controllers/houseOwnerAnalytics.controller.js
+const db = require("../config/knex");
 const houseOwnerAnalyticsService = require("../services/houseOwnerAnalytics.service");
 
 class HouseOwnerAnalyticsController {
+
+  constructor() {
+    this.getHouseOwnerDashboard = this.getHouseOwnerDashboard.bind(this);
+    this.getMonthlyStats = this.getMonthlyStats.bind(this);
+    this.getExpenseAnalysis = this.getExpenseAnalysis.bind(this);
+    this.refreshDashboard = this.refreshDashboard.bind(this);
+    this.getAccessibleHouseOwners = this.getAccessibleHouseOwners.bind(this);
+  }
   // Get house owner dashboard
   async getHouseOwnerDashboard(req, res) {
     try {
-      const userId = req.user.id;
-      
-      // Verify user is a house owner
-      if (req.user.role.slug !== 'house_owner') {
-        return res.status(403).json({
-          success: false,
-          error: 'Only house owners can access this dashboard'
-        });
+      let userId = req.user.id;
+      const role = req.user.role.slug;
+
+      if (role !== 'house_owner') {
+        if(role === 'caretaker') {
+          const accessibleOwners = await this.getAccessibleHouseOwners(userId);
+          if (accessibleOwners.length === 0) {
+            return res.status(403).json({
+              success: false,
+              error: 'No accessible house owners found for this caretaker'
+            });
+          }
+        
+          userId = accessibleOwners[0]; // Assuming first accessible owner for dashboard
+        }
       }
 
       const data = await houseOwnerAnalyticsService.getHouseOwnerDashboard(userId);
@@ -30,6 +46,26 @@ class HouseOwnerAnalyticsController {
       });
     }
   }
+
+  async getAccessibleHouseOwners(caretakerId) {
+        try {
+            const owners = await db('caretakerassignment as ca')
+                .join('house as h', 'ca.houseId', 'h.id')
+                .where('ca.caretakerId', caretakerId)
+                .andWhere(function() {
+                    this.where('ca.expiresAt', '>', new Date())
+                        .orWhereNull('ca.expiresAt');
+                })
+                .andWhere('h.active', true)
+                .distinct('h.ownerId')
+                .pluck('h.ownerId');
+            
+            return owners.map(id => parseInt(id));
+        } catch (error) {
+            console.error('Get accessible owners error:', error);
+            return [];
+        }
+    }
 
   // Get monthly statistics
   async getMonthlyStats(req, res) {

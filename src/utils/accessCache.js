@@ -83,6 +83,7 @@ class AccessCache {
       const accessibleHouses = await this.getUserAccessibleHouses(
         userId, db, HouseController, CaretakerPermissionService
       );
+      
       return accessibleHouses.includes(parseInt(houseId));
     } catch (error) {
       console.error('Error in cached checkHouseAccess:', error);

@@ -16,6 +16,7 @@ class FinancialController {
     this.getFinancialDashboard = this.getFinancialDashboard.bind(this);
     this.sendRentReminders = this.sendRentReminders.bind(this);
     this.checkHouseAccess = this.checkHouseAccess.bind(this);
+    this.calculateNextDueDate = this.calculateNextDueDate.bind(this);
     this.calculateMonthlyProfit = this.calculateMonthlyProfit.bind(this);
     this.getProfitReport = this.getProfitReport.bind(this);
   }
@@ -151,32 +152,37 @@ class FinancialController {
       const monthlyData = await db.raw(
         `
         SELECT 
-            DATE_FORMAT(COALESCE(rp.paid_date, ap.payment_date), '%Y-%m') as month,
-            COALESCE(SUM(rp.paid_amount), 0) as rent_income,
-            COALESCE(SUM(ap.paid_amount), 0) as advance_income,
-            COALESCE(SUM(he.amount), 0) as expenses
+            months.month,
+            COALESCE(rp.total_rent, 0) as rent_income,
+            COALESCE(ap.total_advance, 0) as advance_income,
+            COALESCE(he.total_expenses, 0) as expenses
         FROM (
-            SELECT DISTINCT DATE_FORMAT(paid_date, '%Y-%m') as month 
-            FROM rent_payment 
-            WHERE house_id = ? AND paid_date BETWEEN ? AND ?
+            -- Get unique list of months first
+            SELECT DISTINCT DATE_FORMAT(paid_date, '%Y-%m') as month FROM rent_payment WHERE house_id = ? AND paid_date BETWEEN ? AND ?
             UNION
-            SELECT DISTINCT DATE_FORMAT(payment_date, '%Y-%m') as month 
-            FROM advance_payment 
-            WHERE house_id = ? AND payment_date BETWEEN ? AND ?
+            SELECT DISTINCT DATE_FORMAT(payment_date, '%Y-%m') as month FROM advance_payment WHERE house_id = ? AND payment_date BETWEEN ? AND ?
             UNION
-            SELECT DISTINCT DATE_FORMAT(expense_date, '%Y-%m') as month 
-            FROM house_expense 
-            WHERE house_id = ? AND expense_date BETWEEN ? AND ? AND status = 'approved'
+            SELECT DISTINCT DATE_FORMAT(expense_date, '%Y-%m') as month FROM house_expense WHERE house_id = ? AND expense_date BETWEEN ? AND ? AND status = 'approved'
         ) months
-        LEFT JOIN rent_payment rp ON DATE_FORMAT(rp.paid_date, '%Y-%m') = months.month 
-            AND rp.house_id = ? AND rp.status = 'paid'
-        LEFT JOIN advance_payment ap ON DATE_FORMAT(ap.payment_date, '%Y-%m') = months.month 
-            AND ap.house_id = ?
-        LEFT JOIN house_expense he ON DATE_FORMAT(he.expense_date, '%Y-%m') = months.month 
-            AND he.house_id = ? AND he.status = 'approved'
-        GROUP BY months.month
-        ORDER BY months.month
-        `,
+        LEFT JOIN (
+            SELECT DATE_FORMAT(paid_date, '%Y-%m') as month, SUM(paid_amount) as total_rent
+            FROM rent_payment 
+            WHERE house_id = ? AND status = 'paid'
+            GROUP BY month
+        ) rp ON rp.month = months.month
+        LEFT JOIN (
+            SELECT DATE_FORMAT(payment_date, '%Y-%m') as month, SUM(paid_amount) as total_advance
+            FROM advance_payment 
+            WHERE house_id = ?
+            GROUP BY month
+        ) ap ON ap.month = months.month
+        LEFT JOIN (
+            SELECT DATE_FORMAT(expense_date, '%Y-%m') as month, SUM(amount) as total_expenses
+            FROM house_expense 
+            WHERE house_id = ? AND status = 'approved'
+            GROUP BY month
+        ) he ON he.month = months.month
+        ORDER BY months.month`,
         [
           houseId,
           start,
@@ -530,7 +536,7 @@ class FinancialController {
 
         // Calculate next due date
         if (String(calculate_next_payment) === "true") {
-          nextDueDate = this.calculateNextDueDate(
+          nextDueDate = await this.calculateNextDueDate(
             actualPaidDate,
             flat.should_pay_rent_day
           );
@@ -635,6 +641,22 @@ class FinancialController {
         error: "Failed to record payment",
       });
     }
+  }
+
+  calculateNextDueDate(currentDate, dayOfMonth) {
+      // Ensure dayOfMonth is a valid number, default to current day if missing
+      const day = parseInt(dayOfMonth) || currentDate.getDate();
+      
+      const nextMonth = new Date(currentDate);
+      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      nextMonth.setDate(day);
+
+      // Check if the date is valid
+      if (isNaN(nextMonth.getTime())) {
+          return new Date(); // Fallback to now if calculation fails
+      }
+
+      return nextMonth; 
   }
   // 2. Generate monthly rent invoices
   async generateRentInvoices(req, res) {

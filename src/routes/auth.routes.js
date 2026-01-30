@@ -66,5 +66,19 @@ router.post("/check-link", AuthController.checkAccountLink); // indicating this 
 router.post("/refresh", AuthController.refreshToken);
 router.get("/public-registration-status", AuthController.getPublicRegistrationStatus);
 
+// Password management routes
+router.post('/forgot-password', 
+    AuthController.forgotPassword
+);
+
+router.post('/reset-password',
+    AuthController.resetPassword
+);
+
+// Protected routes
+router.post('/change-password',
+    authMiddleware,
+    AuthController.changePassword
+);
 
 module.exports = router;

@@ -51,6 +51,53 @@ class AuthController {
     }
   }
 
+  async forgotPassword(req, res, next) {
+        try {
+            const { email } = req.body;
+            const result = await AuthService.forgotPassword(email);
+            
+            if (!result.success) {
+                return res.status(400).json(result);
+            }
+            
+            res.json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async resetPassword(req, res, next) {
+        try {
+            const { token, password } = req.body;
+            const result = await AuthService.resetPassword(token, password);
+            
+            if (!result.success) {
+                return res.status(400).json(result);
+            }
+            
+            res.json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async changePassword(req, res, next) {
+        try {
+            const { oldPassword, newPassword } = req.body;
+            const userId = req.user.id;
+            
+            const result = await AuthService.changePassword(userId, oldPassword, newPassword);
+            
+            if (!result.success) {
+                return res.status(400).json(result);
+            }
+            
+            res.json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
+
   async refreshToken(req, res) {
     try {
       const data = await AuthService.refreshToken(req, res);

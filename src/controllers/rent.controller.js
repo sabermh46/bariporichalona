@@ -65,29 +65,105 @@ class RenterController {
         
         try {
             const { 
-                name, 
-                phone, 
-                alternativePhone, 
-                email, 
-                nid,
-                status = 'active',
-                metadata,
-                houseOwnerId // Required for staff/caretaker
+                name, phone, alternativePhone, email, nid,
+                status = 'active', metadata, houseOwnerId 
             } = req.body;
             
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             
-            // Validate required fields
-            if (!name) {
+            // 1. Basic Validation
+            if (!name) return res.status(400).json({ success: false, error: 'Name is required' });
+
+            // 2. DETERMINE THE OWNER FIRST (Crucial fix)
+            // We must know who the renter belongs to before checking for existing email/phone
+            let createdByUserId;
+
+            if (userRole === 'web_owner') {
+                if (!houseOwnerId) return res.status(400).json({ success: false, error: 'houseOwnerId is required' });
+                
+                // Fix the subquery issue here
+                const houseOwner = await db('user')
+                    .where('id', houseOwnerId)
+                    .whereIn('roleId', function() {
+                        this.select('id').from('role').where('slug', 'house_owner');
+                    })
+                    .first();
+                
+                if (!houseOwner) return res.status(400).json({ success: false, error: 'Invalid house owner ID' });
+                createdByUserId = houseOwnerId;
+            } 
+            else if (userRole === 'house_owner') {
+                createdByUserId = userId;
+            }
+            else if (userRole === 'staff' || userRole === 'caretaker') {
+                const hasCreatePermission = await hasPermission(userId, 'renters.create');
+                if (!hasCreatePermission) return res.status(403).json({ success: false, error: 'Permission denied' });
+                
+                if (!houseOwnerId) return res.status(400).json({ success: false, error: 'houseOwnerId required' });
+                
+                const hOId = parseInt(houseOwnerId, 10);
+                
+                if (userRole === 'caretaker') {
+                    const accessibleOwners = await this.getAccessibleHouseOwners(userId);
+                    // Ensure accessibleOwners is an array of IDs
+                    if (!accessibleOwners.includes(hOId)) {
+                        return res.status(403).json({ success: false, error: 'No access to this house owner' });
+                    }
+                }
+                createdByUserId = hOId;
+            } else {
+                return res.status(403).json({ success: false, error: 'Unauthorized role' });
+            }
+
+            if (phone && alternativePhone && String(phone).trim() === String(alternativePhone).trim()) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Name is required'
+                    error: 'Primary phone and alternative phone cannot be the same'
                 });
             }
-            
-            // Determine createdBy (house owner ID)
-            let createdByUserId;
+
+            if(alternativePhone){
+                const phoneInAlt = await db('renter')
+                    .where({ createdBy: createdByUserId, alternativePhone: phone })
+                    .first();
+
+                if (phoneInAlt) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'This phone number is already in use as an alternative contact'
+                    });
+                }
+            }
+
+            // 3. Duplication Check (Now using the verified createdByUserId)
+            if (email) {
+                const existingEmail = await db('renter')
+                    .where({ createdBy: createdByUserId, email: email })
+                    .first();
+                if (existingEmail) return res.status(400).json({ success: false, error: 'Email already exists for this owner' });
+            }
+
+            if (phone) {
+                const existingPhone = await db('renter')
+                    .where({ createdBy: createdByUserId, phone: phone })
+                    .first();
+                if (existingPhone) return res.status(400).json({ success: false, error: 'Phone already exists for this owner' });
+            }
+            if (nid) {
+                const existingNid = await db('renter')
+                    .where({ createdBy: createdByUserId, nid: nid })
+                    .first();
+                
+                if (existingNid) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'This National ID (NID) is already registered under this house owner'
+                    });
+                }
+            }
+
+            // 4. Metadata Preparation
             let creatorInfo = {
                 creatorUserId: userId,
                 creatorName: req.user.name,
@@ -95,108 +171,20 @@ class RenterController {
                 creatorEmail: req.user.email
             };
             
-            if (userRole === 'web_owner') {
-                // Web owner can specify any house owner
-                if (!houseOwnerId) {
-                    return res.status(400).json({
-                        success: false,
-                        error: 'houseOwnerId is required for web owner'
-                    });
-                }
-                createdByUserId = houseOwnerId;
-                
-                // Verify house owner exists
-                const houseOwner = await db('user')
-                    .where('id', houseOwnerId)
-                    .andWhere('roleId', db('role').select('id').where('slug', 'house_owner'))
-                    .first();
-                
-                if (!houseOwner) {
-                    return res.status(400).json({
-                        success: false,
-                        error: 'Invalid house owner ID'
-                    });
-                }
-            } 
-            else if (userRole === 'house_owner') {
-                // House owner creates renter for themselves
-                createdByUserId = userId;
-            }
-            else if (userRole === 'staff' || userRole === 'caretaker') {
-                // Staff needs permission and houseOwnerId
-                const hasCreatePermission = await hasPermission(userId, 'renters.create');
-                if (!hasCreatePermission) {
-                    return res.status(403).json({
-                        success: false,
-                        error: 'You do not have permission to create renters'
-                    });
-                }
-                
-                if (!houseOwnerId) {
-                    return res.status(400).json({
-                        success: false,
-                        error: 'houseOwnerId is required for staff or caretaker'
-                    });
-                }
-
-                let hOId = houseOwnerId;
-
-                //check if valid houseOwnerId then if it is string then convert to number
-                if (typeof houseOwnerId === 'string') {
-                    hOId = parseInt(houseOwnerId, 10);
-                }
-                
-                createdByUserId = hOId;                
-                
-                // Verify staff has access to this house owner
-                // Staff can only create renters for house owners they work with
-                if(userRole === 'caretaker') {
-                    const accessibleOwners = await this.getAccessibleHouseOwners(userId);
-                    console.log("Acc", accessibleOwners);
-                    
-                    if (!accessibleOwners.includes(hOId)) {
-                        return res.status(403).json({
-                            success: false,
-                            error: 'You do not have permission to create renters for this house owner'
-                        });
-                    }
-                }
-            }
-            else {
-                return res.status(403).json({
-                    success: false,
-                    error: 'You do not have permission to create renters'
-                });
-            }
-            
-            // Parse metadata if provided
-            let finalMetadata = {
-                ...creatorInfo,
-                createdAt: new Date().toISOString()
-            };
-            
+            let finalMetadata = { ...creatorInfo, createdAt: new Date().toISOString() };
             if (metadata) {
                 try {
-                    const parsedMetadata = JSON.parse(metadata);
+                    const parsedMetadata = typeof metadata === 'string' ? JSON.parse(metadata) : metadata;
                     finalMetadata = { ...finalMetadata, ...parsedMetadata };
-                } catch (e) {
-                    console.error('Error parsing metadata:', e);
-                }
+                } catch (e) { console.error('Metadata parse error:', e); }
             }
-            
-            // Start transaction
+
+            // 5. Transaction & Insertion
             const trx = await db.transaction();
-            
             try {
-                // Create renter record first (without image URLs)
                 const renterData = {
                     uuid: uuidv4(),
-                    name,
-                    phone,
-                    alternativePhone,
-                    email,
-                    nid,
-                    status,
+                    name, phone, alternativePhone, email, nid, status,
                     metadata: JSON.stringify(finalMetadata),
                     createdBy: createdByUserId,
                     createdAt: new Date(),
@@ -205,78 +193,42 @@ class RenterController {
                 
                 const [renterId] = await trx('renter').insert(renterData);
                 
-                // Handle file uploads if any
                 let nidFrontImageUrl = null;
                 let nidBackImageUrl = null;
-                
-                // Process nidFrontImage
+
                 if (req.files?.nidFrontImage) {
                     const file = req.files.nidFrontImage[0];
                     tempFiles.push(file.path);
-                    
-                    const permanentPath = moveToPermanentLocation(
-                        file.path,
-                        `renters/${renterId}`,
-                        `nid_front${path.extname(file.originalname)}`
-                    );
-                    
+                    const permanentPath = moveToPermanentLocation(file.path, `renters/${renterId}`, `nid_front${path.extname(file.originalname)}`);
                     nidFrontImageUrl = getFileUrl(permanentPath);
                 }
                 
-                // Process nidBackImage
                 if (req.files?.nidBackImage) {
                     const file = req.files.nidBackImage[0];
                     tempFiles.push(file.path);
-                    
-                    const permanentPath = moveToPermanentLocation(
-                        file.path,
-                        `renters/${renterId}`,
-                        `nid_back${path.extname(file.originalname)}`
-                    );
-                    
+                    const permanentPath = moveToPermanentLocation(file.path, `renters/${renterId}`, `nid_back${path.extname(file.originalname)}`);
                     nidBackImageUrl = getFileUrl(permanentPath);
                 }
                 
-                // Update renter with image URLs if files were uploaded
                 if (nidFrontImageUrl || nidBackImageUrl) {
-                    await trx('renter')
-                        .where('id', renterId)
-                        .update({
-                            nidFrontImageUrl,
-                            nidBackImageUrl,
-                            updatedAt: new Date()
-                        });
+                    await trx('renter').where('id', renterId).update({
+                        nidFrontImageUrl, nidBackImageUrl, updatedAt: new Date()
+                    });
                 }
                 
-                // Get complete renter record
-                const renter = await trx('renter')
-                    .where('id', renterId)
-                    .first();
-                
+                const renter = await trx('renter').where('id', renterId).first();
                 await trx.commit();
-                
-                // Clean up any remaining temp files
                 cleanupTempFiles(tempFiles);
                 
-                return res.status(201).json({
-                    success: true,
-                    data: renter,
-                    message: 'Renter created successfully'
-                });
-                
+                return res.status(201).json({ success: true, data: renter });
             } catch (error) {
                 await trx.rollback();
-                cleanupTempFiles(tempFiles);
                 throw error;
             }
-            
         } catch (error) {
             console.error('Create renter error:', error);
             cleanupTempFiles(tempFiles);
-            return res.status(500).json({
-                success: false,
-                error: 'Failed to create renter: ' + error.message
-            });
+            return res.status(500).json({ success: false, error: error.message });
         }
     }
     
@@ -698,7 +650,7 @@ class RenterController {
             const userRole = req.user.role?.slug;
             
             // Get current renter
-            const renter = await db('renter')
+           const renter = await db('renter')
                 .where('id', id)
                 .first();
             
@@ -716,6 +668,59 @@ class RenterController {
                     success: false,
                     error: 'You do not have permission to update this renter'
                 });
+            }
+            
+            // Validate phone not equal to alternative phone
+            const phone = updates.phone !== undefined ? updates.phone : renter.phone;
+            const alternativePhone = updates.alternativePhone !== undefined ? updates.alternativePhone : renter.alternativePhone;
+            
+            if (phone && alternativePhone && phone === alternativePhone) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Phone and alternative phone cannot be the same'
+                });
+            }
+            
+            // Validate email format if updating
+            if (updates.email !== undefined && updates.email) {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(updates.email)) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Invalid email format'
+                    });
+                }
+            }
+            
+            // Check uniqueness for this house owner
+            if (updates.email !== undefined && updates.email !== renter.email) {
+                const existingEmail = await db('renter')
+                    .where('createdBy', renter.createdBy)
+                    .andWhere('email', updates.email)
+                    .andWhere('id', '!=', id)
+                    .first();
+                
+                if (existingEmail) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'A renter with this email already exists for this house owner'
+                    });
+                }
+            }
+            
+            if (updates.phone !== undefined && updates.phone !== renter.phone) {
+                const existingPhone = await db('renter')
+                    .where('createdBy', renter.createdBy)
+                    .andWhere('phone', updates.phone)
+                    .andWhere('id', '!=', id)
+                    .first();
+                
+                if (existingPhone) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'A renter with this phone already exists for this house owner'
+                    });
+                }
             }
             
             // Start transaction
@@ -831,6 +836,115 @@ class RenterController {
                 error: 'Failed to update renter'
             });
         }
+    }
+
+
+    // Add to Controller class
+    async findPotentialDuplicateRenters(req, res) {
+        try {
+            const { email, phone, nid } = req.query;
+            const userId = req.user.id;
+            const userRole = req.user.role?.slug;
+            
+            // Authorization check
+            if (!['web_owner', 'staff'].includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Permission denied'
+                });
+            }
+            
+            if (userRole === 'staff') {
+                const hasPerm = await hasPermission(userId, 'renters.view_all');
+                if (!hasPerm) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Permission denied'
+                    });
+                }
+            }
+            
+            if (!email && !phone && !nid) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'At least one search parameter is required'
+                });
+            }
+            
+            let query = db('renter as r')
+                .select(
+                    'r.*',
+                    'u.name as houseOwnerName',
+                    'u.email as houseOwnerEmail',
+                    'u.phone as houseOwnerPhone',
+                    db.raw('GROUP_CONCAT(DISTINCT CONCAT(h.name, " (", h.address, ")")) as houses')
+                )
+                .leftJoin('user as u', 'r.createdBy', 'u.id')
+                .leftJoin('flat as f', 'r.id', 'f.renter_id')
+                .leftJoin('house as h', 'f.house_id', 'h.id')
+                .groupBy('r.id');
+            
+            // Apply search filters
+            if (email) {
+                query.where('r.email', email);
+            }
+            if (phone) {
+                query.where(function() {
+                    this.where('r.phone', phone)
+                        .orWhere('r.alternativePhone', phone);
+                });
+            }
+            if (nid) {
+                query.where('r.nid', nid);
+            }
+            
+            const renters = await query.limit(50);
+            
+            // Format response
+            const formattedRenters = renters.map(renter => ({
+                id: renter.id,
+                uuid: renter.uuid,
+                name: renter.name,
+                phone: renter.phone,
+                alternativePhone: renter.alternativePhone,
+                email: renter.email,
+                nid: renter.nid,
+                status: renter.status,
+                createdAt: renter.createdAt,
+                houseOwner: {
+                    id: renter.createdBy,
+                    name: renter.houseOwnerName,
+                    email: renter.houseOwnerEmail,
+                    phone: renter.houseOwnerPhone
+                },
+                associatedHouses: renter.houses ? renter.houses.split(',') : [],
+                matchScore: calculateMatchScore(renter, { email, phone, nid })
+            }));
+            
+            return res.json({
+                success: true,
+                data: formattedRenters
+            });
+            
+        } catch (error) {
+            console.error('Find duplicate renters error:', error);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to search renters'
+            });
+        }
+    }
+
+    // Helper function to calculate match score
+    async calculateMatchScore(renter, searchParams) {
+        let score = 0;
+        if (searchParams.email && renter.email === searchParams.email) score += 40;
+        if (searchParams.phone) {
+            if (renter.phone === searchParams.phone) score += 30;
+            if (renter.alternativePhone === searchParams.phone) score += 20;
+        }
+        if (searchParams.nid && renter.nid === searchParams.nid) score += 30;
+        return score;
     }
     
     // 5. Delete renter (soft delete by changing status)

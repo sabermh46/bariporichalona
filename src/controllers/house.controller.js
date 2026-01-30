@@ -1277,7 +1277,7 @@ class HouseController {
             db("flat")
                 .whereIn("house_id", allowedHouseIds)
                 .count("* as count"),
-            // FIXED: Join through caretakerassignment to get houseId
+            // FIXED: Join through caretakerassignment to get houseId and dont count similar house id again
             db("caretakerassignmentpermission as cap")
                 .join("caretakerassignment as ca", "cap.caretakerAssignmentId", "ca.id")
                 .whereIn("ca.houseId", allowedHouseIds)
@@ -1285,7 +1285,8 @@ class HouseController {
                     this.where("ca.expiresAt", ">", new Date())
                         .orWhereNull("ca.expiresAt");
                 })
-                .count("* as count"),
+                .countDistinct("ca.houseId as count"),
+
             houseQuery
                 .clone()
                 .leftJoin("user", "house.ownerId", "user.id")
@@ -1316,6 +1317,7 @@ class HouseController {
         const totalHouses = parseInt(totalHousesResult[0]?.count || 0);
         const totalFlats = parseInt(totalFlatsResult[0]?.count || 0);
         const totalCaretakers = parseInt(totalCaretakersResult[0]?.count || 0);
+        
         const houseRentersMap = rentersData.reduce((acc, row) => {
           if (!acc[row.house_id]) {
             acc[row.house_id] = [];

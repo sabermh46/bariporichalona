@@ -55,9 +55,9 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
   startDate.setMonth(startDate.getMonth() - months);
   
   // Get all houses owned by the user
-  const houses = await db('house')
-    .where('ownerId', houseOwnerId)
-    .select('id', 'name', 'address', 'active', 'createdAt');
+  const houses = await db('house as h')
+    .where('h.ownerId', houseOwnerId)
+    .select('h.id', 'h.name', 'h.address', 'h.active', 'h.createdAt');
   
   if (!houses || houses.length === 0) {
     return {
@@ -107,16 +107,20 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
   const renters = await db('renter')
     .join('flat', 'renter.id', 'flat.renter_id')
     .whereIn('flat.house_id', houseIds)
-    .select('renter.id', 'renter.status', 'renter.name', 'flat.house_id')
+    .select('renter.id', 'renter.status', 'renter.name', 'flat.house_id', 'flat.name as flat_name', 'flat.number as flat_number')
     .distinct();
   
   // Get assigned caretakers
-  const caretakers = await db('caretakerassignment')
-    .whereIn('houseId', houseIds)
-    .andWhere('expiresAt', '>', new Date())
-    .distinct('caretakerId')
-    .count('* as count')
+  const caretakers = await db('caretakerassignment as ca')
+    .whereIn('ca.houseId', houseIds)
+    .countDistinct('ca.caretakerId as count')
     .first();
+
+  const caretakerInfo = await db('caretakerassignment as ca')
+    .join('user as u', 'ca.caretakerId', 'u.id')
+    .whereIn('ca.houseId', houseIds)
+    .select('u.id', 'u.name')
+    .distinct('u.id');
   
   // Get upcoming payments (next 30 days)
   const thirtyDaysFromNow = new Date();
@@ -251,7 +255,7 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
   // Get expense breakdown for current month
   const expenseBreakdown = await db('house_expense')
     .whereIn('house_id', houseIds)
-    .andWhere('status', 'approved')
+    // .andWhere('status', 'approved')
     .andWhereRaw('MONTH(expense_date) = ?', [currentMonth])
     .andWhereRaw('YEAR(expense_date) = ?', [currentYear])
     .groupBy('category')
@@ -315,15 +319,28 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
     ORDER BY transaction_date DESC
     LIMIT 10
   `, [houseIds, houseIds, houseIds]);
+
+  console.log(monthlyRentCollection);
+  console.log(expenseBreakdown);
+  
+  
   
   // Calculate net profit for current month
   const totalRentCollected = monthlyRentCollection
     .filter(item => item.month === `${currentYear}-${String(currentMonth).padStart(2, '0')}`)
     .reduce((sum, item) => sum + parseFloat(item.total_collected || 0), 0);
+    
+    const totalExpenses = expenseBreakdown
+      .reduce((sum, item) => sum + parseFloat(item.total_amount || 0), 0);
+
+    // FIX: Round to 2 decimal places to avoid floating point issues (10999.98 -> 11000)
+    const roundedRent = Number(totalRentCollected.toFixed(2));
+    const roundedExpenses = Math.round((totalExpenses + Number.EPSILON) * 100) / 100;
   
-  const totalExpenses = expenseBreakdown
-    .reduce((sum, item) => sum + parseFloat(item.total_amount || 0), 0);
-  
+    console.log(roundedRent);
+    console.log(roundedExpenses);
+    
+    
   return {
     summary: {
       totalHouses: houses.length,
@@ -336,9 +353,9 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
       activeRenters: renters.filter(r => r.status === 'active').length,
       inactiveRenters: renters.filter(r => r.status !== 'active').length,
       assignedCaretakers: parseInt(caretakers?.count || 0),
-      monthlyRentCollection: totalRentCollected,
-      monthlyExpenses: totalExpenses,
-      monthlyProfit: totalRentCollected - totalExpenses,
+      monthlyRentCollection: roundedRent,
+      monthlyExpenses: roundedExpenses,
+      monthlyProfit: Number((roundedRent - roundedExpenses).toFixed(2)),
       occupancyRate: parseInt(flatStats?.total) > 0 
         ? Math.round((parseInt(flatStats?.occupied || 0) / parseInt(flatStats?.total)) * 100) 
         : 0
@@ -392,8 +409,11 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
       address: house.address,
       active: house.active,
       flatCount: flats.filter(f => f.house_id === house.id).length,
-      createdAt: house.createdAt
+      createdAt: house.createdAt,
+      flats: flats.filter(f => f.house_id === house.id)
     })),
+    caretakers: caretakerInfo,
+    renters: renters,
     currentMonth,
     currentYear,
     timestamp: new Date().toISOString()
