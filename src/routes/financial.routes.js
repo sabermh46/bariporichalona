@@ -165,6 +165,12 @@ router.post('/payments/rent',
     FinancialController.recordRentPayment
 );
 
+router.put('/payments/rent/:id',
+    authMiddleware,
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+    FinancialController.updateRentPayment
+);
+
 router.get('/payments/app-fee',
     authMiddleware,
     roleMiddleware(['web_owner', 'staff', 'caretaker']), // Only web owner

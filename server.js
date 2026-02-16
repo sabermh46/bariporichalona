@@ -59,6 +59,8 @@ const renterRoutes = require("./src/routes/renter.routes");
 const caretakerRoutes = require("./src/routes/caretaker.routes");
 const imageRoutes = require('./src/routes/image.routes');
 const appFeesRoutes = require('./src/routes/appFees.routes');
+const loanRoutes = require('./src/routes/loan.routes');
+
 
 // app.use('/api/images', imageRoutes);
 
@@ -82,6 +84,8 @@ app.use('/', renterRoutes);
 app.use('/caretakers', caretakerRoutes);
 app.use('/house-owner-analytics', require('./src/routes/houseOwnerAnalytics.routes'));
 app.use('/app-fees', appFeesRoutes);
+app.use('/api/loans', loanRoutes);
+
 // router.use('/user-management', userManagementRoutes);
 
 //write a running status endpoint at '/'

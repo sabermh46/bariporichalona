@@ -239,6 +239,7 @@ model house {
   notice              notice[]
   rent_payments       rent_payment[]
   advancePayments     advance_payment[]
+  house_loans         house_loan[]
 
   @@index([ownerId], map: "House_ownerId_idx")
 }
@@ -422,7 +423,7 @@ model rolelimit {
   @@index([roleSlug], map: "RoleLimit_roleSlug_idx")
 }
 
-model PasswordResetToken {
+model passwordresettoken {
   id        BigInt    @id @default(autoincrement())
   token     String    @unique @db.VarChar(255)
   userId    BigInt
@@ -441,7 +442,7 @@ model PasswordResetToken {
   @@index([expiresAt], map: "PasswordResetToken_expiresAt_idx")
 }
 
-model EmailLog {
+model emaillog {
   id          BigInt    @id @default(autoincrement())
   type        String    @db.VarChar(50)
   toEmail     String    @db.VarChar(255)
@@ -565,11 +566,11 @@ model user {
   userloginas_userloginas_targetUserIdTouser                userloginas[]         @relation("userloginas_targetUserIdTouser")
   userloginas_userloginas_userIdTouser                      userloginas[]         @relation("userloginas_userIdTouser")
 
-  passwordresettoken_passwordresettoken_userIdTouser PasswordResetToken[] @relation("passwordresettoken_userIdTouser")
+  passwordresettoken_passwordresettoken_userIdTouser passwordresettoken[] @relation("passwordresettoken_userIdTouser")
+  passwordResetTokens                                passwordresettoken[]
 
   caretakerassignmentpermission_caretakerassignmentpermission_grantedByTouser caretakerassignmentpermission[] @relation("caretakerassignmentpermission_grantedByTouser")
   caretakerassignmentpermission_caretakerassignmentpermission_revokedByTouser caretakerassignmentpermission[] @relation("caretakerassignmentpermission_revokedByTouser")
-  passwordResetTokens                                                         PasswordResetToken[]
 
   @@index([email], map: "User_email_idx")
   @@index([parentId], map: "User_parentId_fkey")
@@ -646,4 +647,42 @@ enum advance_payment_status {
   partially_used
   fully_used
   refunded
+}
+
+model house_loan {
+  id              BigInt    @id @default(autoincrement())
+  uuid            String    @unique(map: "HouseLoan_uuid_key") @db.VarChar(36)
+  house_id        BigInt
+  provider_name   String    @db.VarChar(255)
+  amount          Decimal   @db.Decimal(10, 2)
+  interest_rate   Decimal?  @db.Decimal(5, 2)
+  start_date      DateTime  @db.Date
+  end_date        DateTime? @db.Date
+  monthly_payment Decimal?  @db.Decimal(10, 2)
+  paid_amount     Decimal   @default(0.00) @db.Decimal(10, 2)
+  status          String    @default("active")
+  metadata        String?   @db.LongText
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  house    house                @relation(fields: [house_id], references: [id])
+  payments house_loan_payment[]
+
+  @@index([house_id], map: "HouseLoan_house_id_fkey")
+}
+
+model house_loan_payment {
+  id             BigInt   @id @default(autoincrement())
+  uuid           String   @unique(map: "HouseLoanPayment_uuid_key") @db.VarChar(36)
+  loan_id        BigInt
+  amount         Decimal  @db.Decimal(10, 2)
+  payment_date   DateTime @db.Date
+  transaction_id String?  @db.VarChar(255)
+  notes          String?  @db.Text
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  loan house_loan @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+
+  @@index([loan_id], map: "HouseLoanPayment_loan_id_fkey")
 }

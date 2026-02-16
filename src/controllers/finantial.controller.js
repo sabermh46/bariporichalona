@@ -19,6 +19,7 @@ class FinancialController {
     this.calculateNextDueDate = this.calculateNextDueDate.bind(this);
     this.calculateMonthlyProfit = this.calculateMonthlyProfit.bind(this);
     this.getProfitReport = this.getProfitReport.bind(this);
+    this.updateRentPayment = this.updateRentPayment.bind(this);
   }
 
   async calculateMonthlyProfit(req, res) {
@@ -264,7 +265,10 @@ class FinancialController {
         base_rent,
         amenities_total,
         late_fee,
+        status = "pending", // Default to pending if not provided
         use_advance_payment = false,
+        for_month, // Optional: specific month to create due for (YYYY-MM format)
+        for_year, // Optional: specific year
       } = req.body;
 
       const userId = req.user.id;
@@ -300,7 +304,7 @@ class FinancialController {
         flatMetadata =
           flat.metadata && typeof flat.metadata === "string"
             ? JSON.parse(flat.metadata)
-            : flat.metadata || {};
+            : flatMetadata || {};
       } catch (e) {
         console.error("Failed to parse flat metadata:", e);
         flatMetadata = {};
@@ -367,87 +371,147 @@ class FinancialController {
         .orderBy("due_date", "asc")
         .first();
 
-      if (!currentPayment) {
-        return res.status(400).json({
-          success: false,
-          error: "No pending rent payment found for this flat",
-        });
-      }
-
       const actualPaidDate = paid_date ? new Date(paid_date) : new Date();
+      const today = new Date();
 
-      // Use provided amounts or calculate them
-      // FIXED: Use paid_amount from request body, not undefined paidAmount variable
+      // Calculate base rent amount
       const baseRentAmount = parseFloat(
         base_rent ||
           paid_amount ||
-          currentPayment.base_amount ||
+          (currentPayment ? currentPayment.base_amount : null) ||
           flat.rent_amount ||
           0
       );
-      const calculatedLateFee = parseFloat(late_fee) || 0;
 
-      // If late fee not provided, calculate it
-      let finalLateFee = calculatedLateFee;
-      if (calculatedLateFee === 0 && actualPaidDate > currentPayment.due_date) {
+      // Calculate due date if we need to create a new payment
+      let dueDate = null;
+      if (!currentPayment && status === "pending") {
+        // Calculate due date based on flat's should_pay_rent_day
+        const dayOfMonth = flat.should_pay_rent_day || 10;
+        
+        // Determine which month/year to create the due for
+        let targetYear, targetMonth;
+        
+        if (for_month && for_year) {
+          // Use provided month/year
+          targetYear = parseInt(for_year);
+          targetMonth = parseInt(for_month) - 1; // JavaScript months are 0-indexed
+        } else if (for_month) {
+          // Use provided month with current year
+          targetYear = today.getFullYear();
+          targetMonth = parseInt(for_month) - 1;
+        } else {
+          // Default: next unpaid month
+          targetYear = today.getFullYear();
+          targetMonth = today.getMonth();
+          
+          // Start with current month's due date
+          dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+          
+          // If the day has already passed this month, set for next month
+          if (dueDate < today) {
+            targetMonth += 1;
+            if (targetMonth > 11) {
+              targetMonth = 0;
+              targetYear += 1;
+            }
+            dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+          }
+        }
+        
+        if (!dueDate && targetYear && targetMonth !== undefined) {
+          dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+        }
+
+        // CRITICAL FIX: Check if the month we're trying to create a due for is already paid
+        if (dueDate) {
+          // Calculate month/year boundaries for checking
+          const dueMonth = dueDate.getMonth() + 1; // Convert back to 1-indexed
+          const dueYear = dueDate.getFullYear();
+          
+          // Check if there's already a paid payment for this month/year
+          const alreadyPaidForMonth = await db("rent_payment")
+            .where("flat_id", flat_id)
+            .andWhere(function() {
+              this.where("status", "paid")
+                .orWhere("status", "partial");
+            })
+            .andWhereRaw("MONTH(due_date) = ?", dueMonth)
+            .andWhereRaw("YEAR(due_date) = ?", dueYear)
+            .first();
+
+          if (alreadyPaidForMonth) {
+            return res.status(400).json({
+              success: false,
+              error: `This flat has already paid rent for ${dueYear}-${String(dueMonth).padStart(2, '0')}. Cannot create a new due for an already paid month.`,
+            });
+          }
+
+          // Also check if there's already a pending/overdue payment for this month/year
+          const existingPendingForMonth = await db("rent_payment")
+            .where("flat_id", flat_id)
+            .whereIn("status", ["pending", "overdue"])
+            .andWhereRaw("MONTH(due_date) = ?", dueMonth)
+            .andWhereRaw("YEAR(due_date) = ?", dueYear)
+            .first();
+
+          if (existingPendingForMonth) {
+            return res.status(400).json({
+              success: false,
+              error: `This flat already has a pending/overdue payment for ${dueYear}-${String(dueMonth).padStart(2, '0')}.`,
+            });
+          }
+        }
+      }
+
+      let calculatedLateFee = parseFloat(late_fee) || 0;
+
+      // If creating a new pending payment, don't calculate late fee
+      if (currentPayment && calculatedLateFee === 0 && actualPaidDate > currentPayment.due_date) {
         const daysLate = Math.ceil(
           (actualPaidDate - currentPayment.due_date) / (1000 * 60 * 60 * 24)
         );
         const dailyLateFee =
           (baseRentAmount * (flat.late_fee_percentage || 5)) / 100 / 30;
-        finalLateFee = Math.round(dailyLateFee * daysLate * 100) / 100;
+        calculatedLateFee = Math.round(dailyLateFee * daysLate * 100) / 100;
       }
 
-      // Calculate total
-      const totalAmount = baseRentAmount + amenitiesTotal + finalLateFee;
+      // Calculate total amount
+      const totalAmount = baseRentAmount + amenitiesTotal + calculatedLateFee;
 
-      // FIXED: Calculate expected total properly
-      // Get the expected total from the current payment
-      // If the payment has base_amount and amenities_charge fields, sum them
-      // Otherwise, use the amount field which should be the total
-      let expectedTotal = 0;
-      if (
-        currentPayment.base_amount !== null &&
-        currentPayment.base_amount !== undefined &&
-        currentPayment.amenities_charge !== null &&
-        currentPayment.amenities_charge !== undefined
-      ) {
-        // Payment has breakdown
-        expectedTotal =
-          parseFloat(currentPayment.base_amount || 0) +
-          parseFloat(currentPayment.amenities_charge || 0);
-      } else {
-        // Payment doesn't have breakdown, use amount field
-        expectedTotal = parseFloat(currentPayment.amount || 0);
-      }
+      // Handle status logic
+      let finalStatus = status;
+      if (currentPayment) {
+        // If recording payment for existing due
+        let expectedTotal = 0;
+        if (
+          currentPayment.base_amount !== null &&
+          currentPayment.base_amount !== undefined &&
+          currentPayment.amenities_charge !== null &&
+          currentPayment.amenities_charge !== undefined
+        ) {
+          expectedTotal =
+            parseFloat(currentPayment.base_amount || 0) +
+            parseFloat(currentPayment.amenities_charge || 0);
+        } else {
+          expectedTotal = parseFloat(currentPayment.amount || 0);
+        }
 
-      // FIXED: Better status calculation
-      let status = "paid";
-
-      // If paid amount is less than expected total, it's partial
-      if (totalAmount < expectedTotal) {
-        status = "partial";
-      }
-      // If paid amount is 0 or negative, mark as pending
-      else if (totalAmount <= 0) {
-        status = "pending";
-      }
-      // If status was provided in request, use it (but validate)
-      else if (
-        req.body.status &&
-        ["pending", "paid", "overdue", "partial", "cancelled"].includes(
-          req.body.status
-        )
-      ) {
-        status = req.body.status;
-      }
-      // If we're recording a payment with full amount, it's paid
-      else {
-        status = "paid";
+        // Only adjust status if we're actually recording a payment (not creating a pending due)
+        if (finalStatus !== "pending") {
+          if (totalAmount < expectedTotal) {
+            finalStatus = "partial";
+          } else if (totalAmount <= 0) {
+            finalStatus = "pending";
+          } else {
+            finalStatus = "paid";
+          }
+        }
       }
 
+      // Handle advance payment usage
       let advancePaymentUsed = null;
-      if (use_advance_payment) {
+      if (use_advance_payment && currentPayment) {
         const availableAdvance = await db("advance_payment")
           .where("flat_id", flat_id)
           .andWhere("renter_id", currentPayment.renter_id)
@@ -461,7 +525,6 @@ class FinancialController {
             parseFloat(paid_amount) || totalAmount
           );
 
-          // Apply advance payment
           const newRemaining =
             parseFloat(availableAdvance.remaining_amount) - useAmount;
           await db("advance_payment")
@@ -487,7 +550,7 @@ class FinancialController {
       const paymentMetadata = {
         amenities: paymentAmenities,
         amenitiesTotal: amenitiesTotal,
-        lateFee: finalLateFee,
+        lateFee: calculatedLateFee,
         baseRent: baseRentAmount,
         advancePaymentUsed: advancePaymentUsed,
         renterDetails: {
@@ -499,9 +562,10 @@ class FinancialController {
         paymentType: amenities.length > 0 ? "customized" : "standard",
         statusDetermination: {
           totalPaid: totalAmount,
-          expectedTotal: expectedTotal,
-          calculationMethod:
-            currentPayment.base_amount !== null ? "breakdown" : "simple",
+          calculationMethod: currentPayment ? 
+            (currentPayment.base_amount !== null ? "breakdown" : "simple") : 
+            "new_pending_due",
+          dueMonth: dueDate ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}` : null,
         },
       };
 
@@ -509,33 +573,84 @@ class FinancialController {
       const trx = await db.transaction();
 
       try {
-        // Update rent payment record
-        await trx("rent_payment")
-          .where("id", currentPayment.id)
-          .update({
-            paid_date: actualPaidDate,
-            paid_amount: totalAmount,
+        let paymentId;
+        
+        if (currentPayment) {
+          // Update existing payment
+          await trx("rent_payment")
+            .where("id", currentPayment.id)
+            .update({
+              paid_date: finalStatus === "pending" ? null : actualPaidDate,
+              paid_amount: finalStatus === "pending" ? 0 : totalAmount,
+              base_amount: baseRentAmount,
+              amenities_charge: amenitiesTotal,
+              payment_method,
+              transaction_id,
+              late_fee_amount: calculatedLateFee,
+              status: finalStatus,
+              notes,
+              metadata: JSON.stringify(paymentMetadata),
+              updated_at: new Date(),
+            });
+          paymentId = currentPayment.id;
+        } else if (status === "pending") {
+          // Create new pending due
+          
+          // Validate we have a renter for the flat
+          if (!flat.renter_id) {
+            await trx.rollback();
+            return res.status(400).json({
+              success: false,
+              error: "Cannot create a pending due: No renter assigned to this flat",
+            });
+          }
+
+          const newPayment = {
+            uuid: uuidv4(),
+            flat_id,
+            renter_id: flat.renter_id,
+            house_id: flat.house_id,
+            amount: totalAmount,
+            due_date: dueDate,
+            paid_date: null,
+            paid_amount: 0,
             base_amount: baseRentAmount,
             amenities_charge: amenitiesTotal,
-            payment_method,
-            transaction_id,
-            late_fee_amount: finalLateFee,
-            status: status,
+            payment_method: null,
+            transaction_id: null,
+            status: "pending",
+            late_fee_amount: 0,
             notes,
             metadata: JSON.stringify(paymentMetadata),
+            created_by: userId,
+            created_at: new Date(),
             updated_at: new Date(),
+          };
+          
+          const [newId] = await trx("rent_payment").insert(newPayment);
+          paymentId = newId;
+          
+          // Update flat's rent due date
+          await trx("flat").where("id", flat_id).update({
+            rent_due_date: dueDate,
+            updatedAt: new Date(),
           });
+        }
 
-        // Update flat
-        await trx("flat").where("id", flat_id).update({
-          last_rent_paid_date: actualPaidDate,
-          updatedAt: new Date(),
-        });
+        // Update flat's last rent paid date only if payment is not pending
+        if (finalStatus !== "pending") {
+          await trx("flat").where("id", flat_id).update({
+            last_rent_paid_date: actualPaidDate,
+            updatedAt: new Date(),
+          });
+        }
 
         let nextDueDate = null;
 
-        // Calculate next due date
-        if (String(calculate_next_payment) === "true") {
+        // Calculate next due date only if we're recording a payment (not creating pending due)
+        // AND only if calculate_next_payment is true
+        if (currentPayment && finalStatus !== "pending" && 
+            String(calculate_next_payment) === "true") {
           nextDueDate = await this.calculateNextDueDate(
             actualPaidDate,
             flat.should_pay_rent_day
@@ -544,7 +659,6 @@ class FinancialController {
           // Get flat metadata for next payment
           let nextPaymentAmenities = [];
           if (flatMetadata.amenities && flatMetadata.amenities.length > 0) {
-            // Use flat's default amenities for next payment
             nextPaymentAmenities = flatMetadata.amenities.map((amenity) => ({
               name: amenity.name || "",
               charge: parseFloat(amenity.charge) || 0,
@@ -563,7 +677,7 @@ class FinancialController {
             flat_id,
             renter_id: flat.renter_id,
             house_id: flat.house_id,
-            amount: nextPaymentTotal, // Store total amount
+            amount: nextPaymentTotal,
             base_amount: baseRentAmount,
             amenities_charge: nextAmenitiesTotal,
             metadata: JSON.stringify({
@@ -590,8 +704,8 @@ class FinancialController {
 
         await trx.commit();
 
-        // Send receipt notification
-        if (flat.renterEmail || flat.renterPhone) {
+        // Send receipt notification only for non-pending payments
+        if ((flat.renterEmail || flat.renterPhone) && finalStatus !== "pending") {
           try {
             await NotificationService.sendPaymentReceipt({
               renterName: flat.renterName,
@@ -605,30 +719,32 @@ class FinancialController {
               breakdown: {
                 baseRent: baseRentAmount,
                 amenities: amenitiesTotal,
-                lateFee: finalLateFee,
+                lateFee: calculatedLateFee,
               },
-              status: status,
+              status: finalStatus,
             });
           } catch (notificationError) {
             console.error("Failed to send notification:", notificationError);
-            // Don't fail the payment if notification fails
           }
         }
 
         return res.json({
           success: true,
           data: {
-            paymentId: currentPayment.id,
+            paymentId,
             baseRent: baseRentAmount,
             amenitiesTotal,
-            lateFee: finalLateFee,
+            lateFee: calculatedLateFee,
             totalAmount,
-            expectedTotal,
-            status,
+            status: finalStatus,
             nextDueDate,
+            dueDate: dueDate || (currentPayment ? currentPayment.due_date : null),
             metadata: paymentMetadata,
+            action: currentPayment ? "payment_recorded" : "pending_due_created",
           },
-          message: "Payment recorded successfully",
+          message: currentPayment ? 
+            "Payment recorded successfully" : 
+            "Pending due created successfully",
         });
       } catch (error) {
         await trx.rollback();
@@ -638,7 +754,117 @@ class FinancialController {
       console.error("Record rent payment error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to record payment",
+        error: "Failed to process rent payment",
+      });
+    }
+  }
+
+  // 1.1 Update rent payment
+  async updateRentPayment(req, res) {
+    try {
+      const { id } = req.params;
+      const {
+        paid_amount,
+        payment_method,
+        transaction_id,
+        notes,
+        paid_date,
+        status // Allow manual status override if needed, though we auto-calc
+      } = req.body;
+
+      const userId = req.user.id;
+
+      // Get payment details with house info for permission check
+      const payment = await db("rent_payment")
+        .join("flat", "rent_payment.flat_id", "flat.id")
+        .join("house", "flat.house_id", "house.id")
+        .where("rent_payment.id", id)
+        .select(
+          "rent_payment.*",
+          "house.id as houseId",
+          "house.ownerId"
+        )
+        .first();
+
+      if (!payment) {
+        return res.status(404).json({
+          success: false,
+          error: "Rent payment record not found",
+        });
+      }
+
+      // Check permission
+      let hasAccess = false;
+      const currentUser = req.user;
+
+      if (currentUser.role.slug === "web_owner") {
+        hasAccess = true;
+      } else if (currentUser.role.slug === "house_owner") {
+        hasAccess = payment.ownerId === currentUser.id;
+      } else if (currentUser.role.slug === "staff") {
+        hasAccess = await permissionService.hasPermission(currentUser.id, "payments.update");
+      } else if (currentUser.role.slug === "caretaker") {
+        hasAccess = await CaretakerPermissionService.hasCaretakerPermission(
+          currentUser.id,
+          payment.houseId,
+          "payments.update" // Ensure this permission exists or use payments.create
+        );
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          error: "You do not have permission to update payments for this house",
+        });
+      }
+
+      const updateData = {
+        updated_at: new Date()
+      };
+
+      if (payment_method !== undefined) updateData.payment_method = payment_method;
+      if (transaction_id !== undefined) updateData.transaction_id = transaction_id;
+      if (notes !== undefined) updateData.notes = notes;
+      if (paid_date !== undefined) updateData.paid_date = new Date(paid_date);
+
+      // Handle amount and status update
+      if (paid_amount !== undefined) {
+        const newPaidAmount = parseFloat(paid_amount);
+        updateData.paid_amount = newPaidAmount;
+
+        // Auto-calculate status if not explicitly provided
+        if (!status) {
+          const totalDue = parseFloat(payment.amount);
+          if (newPaidAmount >= totalDue) {
+            updateData.status = "paid";
+          } else if (newPaidAmount > 0) {
+            updateData.status = "partial";
+          } else {
+            updateData.status = "pending";
+          }
+        }
+      }
+
+      if (status !== undefined) {
+        updateData.status = status;
+      }
+
+      await db("rent_payment").where("id", id).update(updateData);
+
+      // Fetch updated record
+      const updatedPayment = await db("rent_payment").where("id", id).first();
+
+      return res.json({
+        success: true,
+        message: "Rent payment updated successfully",
+        data: serializeBigInt(updatedPayment) // Ensure serializeBigInt is available or handle BigInts
+      });
+
+    } catch (error) {
+      console.error("Update rent payment error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to update rent payment",
       });
     }
   }
