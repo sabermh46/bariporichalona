@@ -615,7 +615,7 @@ class FlatController {
         await trx("flat").where("id", id).delete();
 
         // Decrement the house flat count
-        await trx("house").where("id", flat.house_id).decrement("flatCount", 1);
+        // await trx("house").where("id", flat.house_id).decrement("flatCount", 1);
 
         await trx.commit();
 
@@ -636,6 +636,9 @@ class FlatController {
     }
   }
 
+    // Valid payment methods for advance_payment (must match DB enum)
+    static ADVANCE_PAYMENT_METHODS = ['cash', 'bank', 'mobile_banking', 'other'];
+
     // 6. Assign renter to flat (Updated with advance payment and custom next payment date)
     async assignRenter(req, res) {
       try {
@@ -649,6 +652,14 @@ class FlatController {
           advance_payments = [] // New: Array of advance payments
         } = req.body;
         const userId = req.user.id;
+
+        // 1. Require renter_id (prevent "Renter not found" from undefined id)
+        if (renter_id == null || renter_id === '') {
+          return res.status(400).json({
+            success: false,
+            error: 'renter_id is required',
+          });
+        }
 
         // Get flat with house info
         const flat = await db('flat')
@@ -675,7 +686,7 @@ class FlatController {
           }
         }
 
-        // Check if flat already has renter
+        // 2. One renter per flat: check if flat already has a renter (re-checked in transaction for race safety)
         if (flat.renter_id) {
           return res.status(400).json({
             success: false,
@@ -692,24 +703,43 @@ class FlatController {
           });
         }
 
-        // Calculate next rent due date - Use custom date if provided, otherwise calculate
+        // 3. One flat per renter: renter must not already be assigned to another flat
+        const otherFlatWithRenter = await db('flat')
+          .where('renter_id', renter_id)
+          .whereNot('id', id)
+          .first();
+        if (otherFlatWithRenter) {
+          return res.status(400).json({
+            success: false,
+            error: 'Renter is already assigned to another flat. Remove them from that flat first.',
+          });
+        }
+
+        // 4. Validate next_payment_date if provided (avoid Invalid Date in DB)
+        const payRentDay = flat.should_pay_rent_day != null ? Number(flat.should_pay_rent_day) : 10;
         let dueDate;
         if (next_payment_date) {
           dueDate = new Date(next_payment_date);
+          if (Number.isNaN(dueDate.getTime())) {
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid next_payment_date',
+            });
+          }
         } else {
           const today = new Date();
           dueDate = new Date(
             today.getFullYear(),
             today.getMonth() + 1,
-            flat.should_pay_rent_day
+            payRentDay
           );
 
           // If today is after the due day this month, use next month
-          if (today.getDate() > flat.should_pay_rent_day) {
+          if (today.getDate() > payRentDay) {
             dueDate = new Date(
               today.getFullYear(),
               today.getMonth() + 2,
-              flat.should_pay_rent_day
+              payRentDay
             );
           }
         }
@@ -770,12 +800,25 @@ class FlatController {
         flatMetadata.assigned_at = new Date().toISOString();
         flatMetadata.assigned_by = userId;
         
-        // Store advance payment summary in metadata
+        // 5. Validate advance_payments: only allow positive amounts and valid payment_method
+        const validAdvancePayments = [];
         if (advance_payments && advance_payments.length > 0) {
+          for (const ap of advance_payments) {
+            const amount = parseFloat(ap.amount);
+            if (!Number.isFinite(amount) || amount <= 0) continue; // skip invalid/zero
+            const method = (ap.payment_method || 'cash').toLowerCase();
+            if (!FlatController.ADVANCE_PAYMENT_METHODS.includes(method)) {
+              return res.status(400).json({
+                success: false,
+                error: `Invalid advance payment_method "${ap.payment_method}". Allowed: ${FlatController.ADVANCE_PAYMENT_METHODS.join(', ')}`,
+              });
+            }
+            validAdvancePayments.push({ ...ap, amount, payment_method: method });
+          }
           flatMetadata.advance_payments_summary = {
-            total_advance: advance_payments.reduce((sum, payment) => sum + parseFloat(payment.amount || 0), 0),
-            payment_count: advance_payments.length,
-            payments: advance_payments.map(p => ({
+            total_advance: validAdvancePayments.reduce((sum, p) => sum + p.amount, 0),
+            payment_count: validAdvancePayments.length,
+            payments: validAdvancePayments.map(p => ({
               amount: p.amount,
               date: p.payment_date,
               method: p.payment_method
@@ -787,15 +830,27 @@ class FlatController {
         const trx = await db.transaction();
 
         try {
-          // Update flat with metadata and assign renter
-          await trx('flat').where('id', id).update({
+          // 6. Update flat only if still no renter (prevents race: two assigns at once)
+          const updatePayload = {
             renter_id,
             last_rent_paid_date: null,
             rent_due_date: dueDate,
-            next_payment_date: dueDate, // Store the custom next payment date
+            next_payment_date: dueDate,
             metadata: JSON.stringify(flatMetadata),
             updatedAt: new Date(),
-          });
+          };
+          const flatUpdateCount = await trx('flat')
+            .where('id', id)
+            .whereNull('renter_id')
+            .update(updatePayload);
+
+          if (flatUpdateCount === 0) {
+            await trx.rollback();
+            return res.status(400).json({
+              success: false,
+              error: 'Flat already has an active renter',
+            });
+          }
 
           // Create initial rent payment record
           const rentPayment = {
@@ -822,22 +877,22 @@ class FlatController {
 
           await trx('rent_payment').insert(rentPayment);
 
-          // Process advance payments if any
-          if (advance_payments && advance_payments.length > 0) {
-            for (const advancePayment of advance_payments) {
+          // Process advance payments (only validated, positive-amount entries)
+          if (validAdvancePayments.length > 0) {
+            for (const advancePayment of validAdvancePayments) {
               const advanceRecord = {
                 uuid: uuidv4(),
                 renter_id,
                 flat_id: id,
                 house_id: flat.house_id,
-                amount: parseFloat(advancePayment.amount) || 0,
-                paid_amount: parseFloat(advancePayment.paid_amount) || parseFloat(advancePayment.amount) || 0,
-                remaining_amount: parseFloat(advancePayment.amount) || 0,
+                amount: advancePayment.amount,
+                paid_amount: Number(advancePayment.paid_amount) || advancePayment.amount,
+                remaining_amount: advancePayment.amount,
                 status: 'paid',
                 payment_date: advancePayment.payment_date ? new Date(advancePayment.payment_date) : new Date(),
-                payment_method: advancePayment.payment_method || 'cash',
-                transaction_id: advancePayment.transaction_id,
-                notes: advancePayment.notes,
+                payment_method: advancePayment.payment_method,
+                transaction_id: advancePayment.transaction_id || null,
+                notes: advancePayment.notes || null,
                 metadata: JSON.stringify({
                   type: 'advance',
                   for_months: advancePayment.for_months || 0,
@@ -846,7 +901,6 @@ class FlatController {
                 created_at: new Date(),
                 updated_at: new Date(),
               };
-              
               await trx('advance_payment').insert(advanceRecord);
             }
           }
@@ -862,8 +916,8 @@ class FlatController {
             renterMetadata = {};
           }
 
-          if (advance_payments && advance_payments.length > 0) {
-            renterMetadata.advance_payments = advance_payments.map(payment => ({
+          if (validAdvancePayments.length > 0) {
+            renterMetadata.advance_payments = validAdvancePayments.map(payment => ({
               paid_amount: payment.amount,
               date: payment.payment_date || new Date().toISOString(),
               method: payment.payment_method,
@@ -873,7 +927,7 @@ class FlatController {
             }));
             renterMetadata.current_flat_id = id;
             renterMetadata.current_house_id = flat.house_id;
-            
+
             await trx('renter').where('id', renter_id).update({
               metadata: JSON.stringify(renterMetadata),
               updatedAt: new Date(),
@@ -890,7 +944,7 @@ class FlatController {
               nextDueDate: dueDate,
               totalRent: totalRent,
               nextPaymentDate: next_payment_date || dueDate.toISOString().split('T')[0],
-              advancePayments: advance_payments || [],
+              advancePayments: validAdvancePayments,
               breakdown: {
                 baseRent: baseRent,
                 amenitiesCharge: totalAmenitiesCharge,
