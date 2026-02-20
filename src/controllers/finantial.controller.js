@@ -251,12 +251,20 @@ class FinancialController {
       });
     }
   }
+  // Helper: get for_month string YYYY-MM from a Date
+  getForMonth(date) {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return null;
+    const y = date.getFullYear();
+    const m = date.getMonth() + 1;
+    return `${y}-${String(m).padStart(2, "0")}`;
+  }
+
   // 1. Record rent payment (manual by house owner + need to ensure that caretaker has permission)
   async recordRentPayment(req, res) {
     try {
       const {
         payment_method,
-        paid_amount, // This is actually base rent amount from frontend
+        paid_amount, // Cash amount received (or base rent from frontend when doing full payment)
         transaction_id,
         notes,
         paid_date,
@@ -267,6 +275,7 @@ class FinancialController {
         late_fee,
         status = "pending", // Default to pending if not provided
         use_advance_payment = false,
+        renter_paid_remaining, // Optional: additional cash from renter (e.g. when closing month after applying advance)
         for_month, // Optional: specific month to create due for (YYYY-MM format)
         for_year, // Optional: specific year
       } = req.body;
@@ -423,42 +432,18 @@ class FinancialController {
           dueDate = new Date(targetYear, targetMonth, dayOfMonth);
         }
 
-        // CRITICAL FIX: Check if the month we're trying to create a due for is already paid
+        // One record per flat per month: check by for_month (YYYY-MM)
         if (dueDate) {
-          // Calculate month/year boundaries for checking
-          const dueMonth = dueDate.getMonth() + 1; // Convert back to 1-indexed
-          const dueYear = dueDate.getFullYear();
-          
-          // Check if there's already a paid payment for this month/year
-          const alreadyPaidForMonth = await db("rent_payment")
+          const forMonthStr = this.getForMonth(dueDate);
+          const existingForMonth = await db("rent_payment")
             .where("flat_id", flat_id)
-            .andWhere(function() {
-              this.where("status", "paid")
-                .orWhere("status", "partial");
-            })
-            .andWhereRaw("MONTH(due_date) = ?", dueMonth)
-            .andWhereRaw("YEAR(due_date) = ?", dueYear)
+            .andWhere("for_month", forMonthStr)
             .first();
 
-          if (alreadyPaidForMonth) {
+          if (existingForMonth) {
             return res.status(400).json({
               success: false,
-              error: `This flat has already paid rent for ${dueYear}-${String(dueMonth).padStart(2, '0')}. Cannot create a new due for an already paid month.`,
-            });
-          }
-
-          // Also check if there's already a pending/overdue payment for this month/year
-          const existingPendingForMonth = await db("rent_payment")
-            .where("flat_id", flat_id)
-            .whereIn("status", ["pending", "overdue"])
-            .andWhereRaw("MONTH(due_date) = ?", dueMonth)
-            .andWhereRaw("YEAR(due_date) = ?", dueYear)
-            .first();
-
-          if (existingPendingForMonth) {
-            return res.status(400).json({
-              success: false,
-              error: `This flat already has a pending/overdue payment for ${dueYear}-${String(dueMonth).padStart(2, '0')}.`,
+              error: `This flat already has a rent record for ${forMonthStr}. One record per month per flat.`,
             });
           }
         }
@@ -479,38 +464,11 @@ class FinancialController {
       // Calculate total amount
       const totalAmount = baseRentAmount + amenitiesTotal + calculatedLateFee;
 
-      // Handle status logic
-      let finalStatus = status;
-      if (currentPayment) {
-        // If recording payment for existing due
-        let expectedTotal = 0;
-        if (
-          currentPayment.base_amount !== null &&
-          currentPayment.base_amount !== undefined &&
-          currentPayment.amenities_charge !== null &&
-          currentPayment.amenities_charge !== undefined
-        ) {
-          expectedTotal =
-            parseFloat(currentPayment.base_amount || 0) +
-            parseFloat(currentPayment.amenities_charge || 0);
-        } else {
-          expectedTotal = parseFloat(currentPayment.amount || 0);
-        }
-
-        // Only adjust status if we're actually recording a payment (not creating a pending due)
-        if (finalStatus !== "pending") {
-          if (totalAmount < expectedTotal) {
-            finalStatus = "partial";
-          } else if (totalAmount <= 0) {
-            finalStatus = "pending";
-          } else {
-            finalStatus = "paid";
-          }
-        }
-      }
-
-      // Handle advance payment usage
+      // Handle advance payment usage (deduct from advance, count toward total paid for the month)
       let advancePaymentUsed = null;
+      const cashFromRenter = renter_paid_remaining != null && renter_paid_remaining !== ""
+        ? parseFloat(renter_paid_remaining)
+        : (parseFloat(paid_amount) || totalAmount);
       if (use_advance_payment && currentPayment) {
         const availableAdvance = await db("advance_payment")
           .where("flat_id", flat_id)
@@ -520,9 +478,11 @@ class FinancialController {
           .first();
 
         if (availableAdvance) {
+          const remainingDue = totalAmount - (parseFloat(currentPayment.paid_amount) || 0);
           const useAmount = Math.min(
             parseFloat(availableAdvance.remaining_amount),
-            parseFloat(paid_amount) || totalAmount
+            remainingDue,
+            totalAmount
           );
 
           const newRemaining =
@@ -540,9 +500,29 @@ class FinancialController {
             amount: useAmount,
             remaining: newRemaining,
           };
+        }
+      }
 
-          // Adjust paid amount
-          paid_amount = (parseFloat(paid_amount) || totalAmount) - useAmount;
+      // Total paid for this month = existing paid (e.g. from apply-advance) + advance used this call + cash from renter
+      const existingPaid = currentPayment ? (parseFloat(currentPayment.paid_amount) || 0) : 0;
+      const advanceUsedThisCall = advancePaymentUsed ? advancePaymentUsed.amount : 0;
+      const totalPaidForMonth = existingPaid + advanceUsedThisCall + (Number.isFinite(cashFromRenter) ? cashFromRenter : 0);
+
+      // Expected total for the period (base + amenities + late fee)
+      const expectedTotal = totalAmount;
+
+      // Handle status logic (based on total paid for month vs expected)
+      let finalStatus = status;
+      if (currentPayment) {
+        // Only adjust status if we're actually recording a payment (not creating a pending due)
+        if (finalStatus !== "pending") {
+          if (totalPaidForMonth >= expectedTotal) {
+            finalStatus = "paid";
+          } else if (totalPaidForMonth > 0) {
+            finalStatus = "partial";
+          } else {
+            finalStatus = "pending";
+          }
         }
       }
 
@@ -561,11 +541,12 @@ class FinancialController {
         flatNumber: flat.number,
         paymentType: amenities.length > 0 ? "customized" : "standard",
         statusDetermination: {
-          totalPaid: totalAmount,
-          calculationMethod: currentPayment ? 
-            (currentPayment.base_amount !== null ? "breakdown" : "simple") : 
+          totalPaid: currentPayment ? totalPaidForMonth : totalAmount,
+          renter_paid_remaining: renter_paid_remaining != null ? parseFloat(renter_paid_remaining) : undefined,
+          calculationMethod: currentPayment ?
+            (currentPayment.base_amount !== null ? "breakdown" : "simple") :
             "new_pending_due",
-          dueMonth: dueDate ? `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}` : null,
+          dueMonth: dueDate ? this.getForMonth(dueDate) : null,
         },
       };
 
@@ -576,22 +557,24 @@ class FinancialController {
         let paymentId;
         
         if (currentPayment) {
-          // Update existing payment
-          await trx("rent_payment")
-            .where("id", currentPayment.id)
-            .update({
-              paid_date: finalStatus === "pending" ? null : actualPaidDate,
-              paid_amount: finalStatus === "pending" ? 0 : totalAmount,
-              base_amount: baseRentAmount,
-              amenities_charge: amenitiesTotal,
-              payment_method,
-              transaction_id,
-              late_fee_amount: calculatedLateFee,
-              status: finalStatus,
-              notes,
-              metadata: JSON.stringify(paymentMetadata),
-              updated_at: new Date(),
-            });
+          // Update existing payment (paid_amount = total for month: existing + advance + renter_paid_remaining)
+          const updatePayload = {
+            paid_date: finalStatus === "pending" ? null : actualPaidDate,
+            paid_amount: finalStatus === "pending" ? 0 : totalPaidForMonth,
+            base_amount: baseRentAmount,
+            amenities_charge: amenitiesTotal,
+            payment_method,
+            transaction_id,
+            late_fee_amount: calculatedLateFee,
+            status: finalStatus,
+            notes,
+            metadata: JSON.stringify(paymentMetadata),
+            updated_at: new Date(),
+          };
+          if (currentPayment.for_month == null && currentPayment.due_date) {
+            updatePayload.for_month = this.getForMonth(new Date(currentPayment.due_date));
+          }
+          await trx("rent_payment").where("id", currentPayment.id).update(updatePayload);
           paymentId = currentPayment.id;
         } else if (status === "pending") {
           // Create new pending due
@@ -605,6 +588,7 @@ class FinancialController {
             });
           }
 
+          const forMonthStr = this.getForMonth(dueDate);
           const newPayment = {
             uuid: uuidv4(),
             flat_id,
@@ -612,6 +596,7 @@ class FinancialController {
             house_id: flat.house_id,
             amount: totalAmount,
             due_date: dueDate,
+            for_month: forMonthStr,
             paid_date: null,
             paid_amount: 0,
             base_amount: baseRentAmount,
@@ -626,7 +611,7 @@ class FinancialController {
             created_at: new Date(),
             updated_at: new Date(),
           };
-          
+
           const [newId] = await trx("rent_payment").insert(newPayment);
           paymentId = newId;
           
@@ -671,6 +656,18 @@ class FinancialController {
           );
 
           const nextPaymentTotal = baseRentAmount + nextAmenitiesTotal;
+          const nextForMonth = this.getForMonth(nextDueDate);
+          const existingNext = await trx("rent_payment")
+            .where("flat_id", flat_id)
+            .andWhere("for_month", nextForMonth)
+            .first();
+          if (existingNext) {
+            await trx.rollback();
+            return res.status(400).json({
+              success: false,
+              error: `Next month (${nextForMonth}) already has a rent record for this flat.`,
+            });
+          }
 
           const nextPayment = {
             uuid: uuidv4(),
@@ -680,6 +677,7 @@ class FinancialController {
             amount: nextPaymentTotal,
             base_amount: baseRentAmount,
             amenities_charge: nextAmenitiesTotal,
+            for_month: nextForMonth,
             metadata: JSON.stringify({
               amenities: nextPaymentAmenities,
               breakdown: {
@@ -736,9 +734,12 @@ class FinancialController {
             amenitiesTotal,
             lateFee: calculatedLateFee,
             totalAmount,
+            totalPaidForMonth: currentPayment ? totalPaidForMonth : 0,
+            renter_paid_remaining: renter_paid_remaining != null ? parseFloat(renter_paid_remaining) : undefined,
             status: finalStatus,
             nextDueDate,
             dueDate: dueDate || (currentPayment ? currentPayment.due_date : null),
+            for_month: dueDate ? this.getForMonth(dueDate) : (currentPayment && currentPayment.due_date ? this.getForMonth(new Date(currentPayment.due_date)) : null),
             metadata: paymentMetadata,
             action: currentPayment ? "payment_recorded" : "pending_due_created",
           },
@@ -936,31 +937,20 @@ class FinancialController {
             flat.should_pay_rent_day
           );
 
-          // Check if invoice already exists for this month
+          const forMonthStr = this.getForMonth(dueDate);
           const existingInvoice = await db("rent_payment")
             .where("flat_id", flat.id)
-            .andWhere(
-              "due_date",
-              ">=",
-              new Date(targetMonth.getFullYear(), targetMonth.getMonth(), 1)
-            )
-            .andWhere(
-              "due_date",
-              "<=",
-              new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0)
-            )
+            .andWhere("for_month", forMonthStr)
             .first();
 
           if (existingInvoice) {
             errors.push(
-              `Invoice already exists for flat ${flat.number} for ${targetMonth
-                .toISOString()
-                .slice(0, 7)}`
+              `Invoice already exists for flat ${flat.number} for ${forMonthStr}`
             );
             continue;
           }
 
-          // Create rent payment record
+          // Create rent payment record (one per flat per month)
           const rentPayment = {
             uuid: uuidv4(),
             flat_id: flat.id,
@@ -968,6 +958,7 @@ class FinancialController {
             house_id,
             amount: flat.rent_amount || 0,
             due_date,
+            for_month: forMonthStr,
             status: "pending",
             created_at: new Date(),
             updated_at: new Date(),

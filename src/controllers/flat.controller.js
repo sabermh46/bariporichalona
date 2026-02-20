@@ -852,7 +852,8 @@ class FlatController {
             });
           }
 
-          // Create initial rent payment record
+          // Create initial rent payment record (one per flat per month via for_month)
+          const forMonthStr = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}`;
           const rentPayment = {
             uuid: uuidv4(),
             flat_id: id,
@@ -861,6 +862,7 @@ class FlatController {
             amount: totalRent,
             base_amount: baseRent,
             amenities_charge: totalAmenitiesCharge,
+            for_month: forMonthStr,
             metadata: JSON.stringify({
               amenities: finalAmenities,
               breakdown: {
@@ -966,14 +968,28 @@ class FlatController {
       }
     }
 
-    // Add this method to apply advance payment to rent
+    // Helper: get for_month YYYY-MM from a Date
+    getForMonth(date) {
+      if (!date || !(date instanceof Date) || isNaN(date.getTime())) return null;
+      const y = date.getFullYear();
+      const m = date.getMonth() + 1;
+      return `${y}-${String(m).padStart(2, '0')}`;
+    }
+
+    // Apply advance payment to a rent payment; optional cash from renter and create next month due
     async applyAdvancePayment(req, res) {
       try {
         const { id: flat_id } = req.params;
-        const { advance_payment_id, rent_payment_id, amount } = req.body;
+        const {
+          advance_payment_id,
+          rent_payment_id,
+          amount,
+          cash_paid_amount, // optional: renter-paid remaining (e.g. 6000 when closing month)
+          create_next_due, // optional: when rent becomes paid, create next month's due
+        } = req.body;
         const userId = req.user.id;
 
-        // Get flat and check permissions
+        // Get flat and check permissions (need house for next-due creation)
         const flat = await db('flat')
           .join('house', 'flat.house_id', 'house.id')
           .where('flat.id', flat_id)
@@ -1025,7 +1041,8 @@ class FlatController {
         }
 
         const applyAmount = parseFloat(amount) || parseFloat(advancePayment.remaining_amount) || 0;
-        
+        const cashPaid = Number.isFinite(parseFloat(cash_paid_amount)) ? Math.max(0, parseFloat(cash_paid_amount)) : 0;
+
         if (applyAmount <= 0) {
           return res.status(400).json({
             success: false,
@@ -1046,7 +1063,7 @@ class FlatController {
           // Update advance payment
           const newRemaining = parseFloat(advancePayment.remaining_amount) - applyAmount;
           const advanceStatus = newRemaining > 0 ? 'partially_used' : 'fully_used';
-          
+
           await trx('advance_payment')
             .where('id', advance_payment_id)
             .update({
@@ -1055,27 +1072,98 @@ class FlatController {
               updated_at: new Date(),
             });
 
-          // Update rent payment
+          // Total paid for this month = existing + advance applied + optional cash from renter
           const currentPaid = parseFloat(rentPayment.paid_amount) || 0;
-          const newPaid = currentPaid + applyAmount;
-          const rentStatus = newPaid >= rentPayment.amount ? 'paid' : 
-                            newPaid > 0 ? 'partial' : 'pending';
+          const newPaid = currentPaid + applyAmount + cashPaid;
+          const rentStatus = newPaid >= rentPayment.amount ? 'paid' :
+            newPaid > 0 ? 'partial' : 'pending';
 
-          await trx('rent_payment')
-            .where('id', rent_payment_id)
-            .update({
-              paid_amount: newPaid,
-              status: rentStatus,
-              updated_at: new Date(),
-              metadata: JSON.stringify({
-                ...(rentPayment.metadata ? JSON.parse(rentPayment.metadata) : {}),
-                advance_payment_used: {
-                  advance_payment_id,
-                  amount: applyAmount,
-                  applied_at: new Date().toISOString()
-                }
-              }),
-            });
+          // Merge advance_payment_used into metadata (keep array of applications)
+          let meta = {};
+          try {
+            meta = rentPayment.metadata && typeof rentPayment.metadata === 'string'
+              ? JSON.parse(rentPayment.metadata)
+              : rentPayment.metadata || {};
+          } catch (e) {
+            meta = {};
+          }
+          const advanceUsedList = Array.isArray(meta.advance_payment_used)
+            ? meta.advance_payment_used
+            : (meta.advance_payment_used ? [meta.advance_payment_used] : []);
+          advanceUsedList.push({
+            advance_payment_id,
+            amount: applyAmount,
+            applied_at: new Date().toISOString(),
+          });
+          if (cashPaid > 0) {
+            meta.renter_paid_remaining = (meta.renter_paid_remaining || 0) + cashPaid;
+          }
+          meta.advance_payment_used = advanceUsedList;
+
+          const rentUpdatePayload = {
+            paid_amount: newPaid,
+            status: rentStatus,
+            updated_at: new Date(),
+            metadata: JSON.stringify(meta),
+          };
+          if (rentStatus !== 'pending' && rentPayment.paid_date == null) {
+            rentUpdatePayload.paid_date = new Date();
+          }
+          await trx('rent_payment').where('id', rent_payment_id).update(rentUpdatePayload);
+
+          let nextDueDate = null;
+          let nextForMonth = null;
+
+          // When rent becomes paid and create_next_due is true, create next month's due (one per flat per month)
+          if (String(create_next_due) === 'true' && rentStatus === 'paid' && flat.renter_id) {
+            const payDay = flat.should_pay_rent_day != null ? Number(flat.should_pay_rent_day) : 10;
+            const dueDate = rentPayment.due_date ? new Date(rentPayment.due_date) : new Date();
+            const nextMonth = new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, payDay);
+            nextDueDate = nextMonth;
+            nextForMonth = this.getForMonth(nextMonth);
+
+            const existingNext = await trx('rent_payment')
+              .where('flat_id', flat_id)
+              .andWhere('for_month', nextForMonth)
+              .first();
+            if (!existingNext) {
+              let flatMeta = {};
+              try {
+                flatMeta = flat.metadata && typeof flat.metadata === 'string'
+                  ? JSON.parse(flat.metadata)
+                  : flat.metadata || {};
+              } catch (e) {
+                flatMeta = {};
+              }
+              const nextAmenities = flatMeta.amenities || [];
+              const nextAmenitiesCharge = nextAmenities.reduce((s, a) => s + (parseFloat(a.charge) || 0), 0);
+              const baseRent = parseFloat(flat.rent_amount) || 0;
+              const nextTotal = baseRent + nextAmenitiesCharge;
+              const nextPayment = {
+                uuid: uuidv4(),
+                flat_id,
+                renter_id: flat.renter_id,
+                house_id: flat.house_id,
+                amount: nextTotal,
+                base_amount: baseRent,
+                amenities_charge: nextAmenitiesCharge,
+                for_month: nextForMonth,
+                due_date: nextMonth,
+                status: 'pending',
+                metadata: JSON.stringify({
+                  amenities: nextAmenities,
+                  breakdown: { base_rent: baseRent, amenities_charge: nextAmenitiesCharge, total: nextTotal },
+                }),
+                created_at: new Date(),
+                updated_at: new Date(),
+              };
+              await trx('rent_payment').insert(nextPayment);
+              await trx('flat').where('id', flat_id).update({
+                rent_due_date: nextMonth,
+                updatedAt: new Date(),
+              });
+            }
+          }
 
           await trx.commit();
 
@@ -1085,8 +1173,12 @@ class FlatController {
               advance_payment_id,
               rent_payment_id,
               amount_applied: applyAmount,
+              cash_paid_amount: cashPaid,
               remaining_advance: newRemaining,
               rent_status: rentStatus,
+              total_paid_for_month: newPaid,
+              nextDueDate: nextDueDate ? nextDueDate.toISOString().split('T')[0] : null,
+              nextForMonth,
             },
             message: 'Advance payment applied successfully',
           });
