@@ -1244,7 +1244,7 @@ class FlatController {
       }
     }
 
-  // 7. Remove renter from flat
+  // 7. Remove renter from flat (fresh state: no dues from renter; advance cleared / refund_due recorded)
   async removeRenter(req, res) {
     try {
       const { id } = req.params;
@@ -1254,7 +1254,7 @@ class FlatController {
       const flat = await db("flat")
         .join("house", "flat.house_id", "house.id")
         .where("flat.id", id)
-        .select("flat.*", "house.ownerId")
+        .select("flat.*", "house.ownerId", "house.name as house_name")
         .first();
 
       if (!flat) {
@@ -1283,25 +1283,86 @@ class FlatController {
         });
       }
 
-      // Check for pending payments
-      const pendingPayments = await db("rent_payment")
+      // (ii) Block if renter has any unpaid/partially paid rent (must be fresh for new renter)
+      const duesFromRenter = await db("rent_payment")
         .where("flat_id", id)
-        .andWhere("status", "in", ["pending", "overdue"])
-        .select("id", "amount", "due_date");
+        .andWhere("status", "in", ["pending", "overdue", "partial"])
+        .select("id", "amount", "paid_amount", "due_date", "for_month");
 
-      if (pendingPayments.length > 0) {
+      if (duesFromRenter.length > 0) {
         return res.status(400).json({
           success: false,
-          error: "Cannot remove renter with pending payments",
-          pendingPayments,
+          error: "Cannot remove renter while they have unpaid or partially paid rent. Clear dues first.",
+          pendingPayments: duesFromRenter,
         });
       }
 
-      // Start transaction
+      // (iii) Remaining advance: we allow removal; make advance "fresh" (refunded) and attach refund_due to renter
+      const advanceWithRemaining = await db("advance_payment")
+        .where("flat_id", id)
+        .andWhere("renter_id", flat.renter_id)
+        .andWhere("remaining_amount", ">", 0)
+        .select("id", "remaining_amount", "amount");
+
+      let totalRefundDue = 0;
+      if (advanceWithRemaining.length > 0) {
+        totalRefundDue = advanceWithRemaining.reduce(
+          (sum, row) => sum + parseFloat(row.remaining_amount || 0),
+          0
+        );
+      }
+
       const trx = await db.transaction();
 
       try {
-        // Update flat
+        // Clear advance for this flat+renter (make table fresh): set remaining = 0, status = refunded
+        if (advanceWithRemaining.length > 0) {
+          await trx("advance_payment")
+            .where("flat_id", id)
+            .andWhere("renter_id", flat.renter_id)
+            .andWhere("remaining_amount", ">", 0)
+            .update({
+              remaining_amount: 0,
+              status: "refunded",
+              updated_at: new Date(),
+            });
+        }
+
+        // Attach refund_due to renter metadata so house owner knows to refund later
+        if (totalRefundDue > 0) {
+          const renter = await trx("renter").where("id", flat.renter_id).first();
+          if (renter) {
+            let renterMeta = {};
+            try {
+              renterMeta = renter.metadata && typeof renter.metadata === "string"
+                ? JSON.parse(renter.metadata)
+                : renter.metadata || {};
+            } catch (e) {
+              renterMeta = {};
+            }
+            const refundDueList = Array.isArray(renterMeta.refund_due) ? renterMeta.refund_due : [];
+            refundDueList.push({
+              amount: totalRefundDue,
+              flat_id: id,
+              house_id: flat.house_id,
+              flat_name: flat.name || flat.number,
+              house_name: flat.house_name,
+              removed_at: new Date().toISOString(),
+              settled_at: null,
+              settled_by: null,
+              notes: null,
+            });
+            renterMeta.refund_due = refundDueList;
+            await trx("renter")
+              .where("id", flat.renter_id)
+              .update({
+                metadata: JSON.stringify(renterMeta),
+                updatedAt: new Date(),
+              });
+          }
+        }
+
+        // Update flat (fresh for new renter)
         await trx("flat").where("id", id).update({
           renter_id: null,
           last_rent_paid_date: null,
@@ -1323,7 +1384,10 @@ class FlatController {
 
         return res.json({
           success: true,
-          message: "Renter removed successfully",
+          message: totalRefundDue > 0
+            ? "Renter removed. Advance cleared. Refund due recorded for this renter."
+            : "Renter removed successfully",
+          refund_due: totalRefundDue > 0 ? { amount: totalRefundDue, renter_id: flat.renter_id } : null,
         });
       } catch (error) {
         await trx.rollback();

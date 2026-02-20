@@ -214,4 +214,16 @@ router.post('/financial/generate-invoices',
 router.get('/financial/monthly-profit', authMiddleware, FinancialController.calculateMonthlyProfit);
 router.get('/financial/profit-report', authMiddleware, FinancialController.getProfitReport);
 
+// Refund due (advance remaining at renter removal): list and settle
+router.get('/financial/refund-due',
+  authMiddleware,
+  roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+  FinancialController.getRefundDue
+);
+router.post('/financial/refund-settled',
+  authMiddleware,
+  roleMiddleware(['house_owner', 'staff', 'web_owner']),
+  FinancialController.settleRefund
+);
+
 module.exports = router;

@@ -20,6 +20,8 @@ class FinancialController {
     this.calculateMonthlyProfit = this.calculateMonthlyProfit.bind(this);
     this.getProfitReport = this.getProfitReport.bind(this);
     this.updateRentPayment = this.updateRentPayment.bind(this);
+    this.getRefundDue = this.getRefundDue.bind(this);
+    this.settleRefund = this.settleRefund.bind(this);
   }
 
   async calculateMonthlyProfit(req, res) {
@@ -866,6 +868,177 @@ class FinancialController {
       return res.status(500).json({
         success: false,
         error: "Failed to update rent payment",
+      });
+    }
+  }
+
+  // GET: List renters that the house owner needs to refund (remaining advance at removal)
+  async getRefundDue(req, res) {
+    try {
+      const userId = req.user.id;
+      const { house_id: houseIdParam } = req.query;
+
+      let houseIds = [];
+      if (req.user.role.slug === "web_owner") {
+        const allHouses = await db("house").select("id");
+        houseIds = allHouses.map((h) => h.id);
+      } else if (req.user.role.slug === "house_owner") {
+        houseIds = await db("house").where("ownerId", userId).pluck("id");
+      } else if (req.user.role.slug === "staff") {
+        const hasPermission = await permissionService.hasPermission(userId, "payments.read");
+        if (!hasPermission) {
+          return res.status(403).json({ success: false, error: "No permission" });
+        }
+        houseIds = await db("house").pluck("id");
+      } else if (req.user.role.slug === "caretaker") {
+        const assigned = await db("caretakerassignment")
+          .where("caretakerId", userId)
+          .andWhere("expiresAt", ">", new Date())
+          .pluck("houseId");
+        houseIds = assigned;
+      }
+
+      if (houseIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      if (houseIdParam) {
+        const hId = parseInt(houseIdParam);
+        if (!houseIds.includes(hId)) {
+          return res.status(403).json({ success: false, error: "Unauthorized house access" });
+        }
+        houseIds = [hId];
+      }
+
+      const renters = await db("renter").select("id", "name", "phone", "email", "metadata");
+      const list = [];
+
+      for (const renter of renters) {
+        let meta = {};
+        try {
+          meta = renter.metadata && typeof renter.metadata === "string"
+            ? JSON.parse(renter.metadata)
+            : renter.metadata || {};
+        } catch (e) {
+          continue;
+        }
+        const refundDue = meta.refund_due;
+        if (!Array.isArray(refundDue) || refundDue.length === 0) continue;
+
+        const unsettled = refundDue.filter(
+          (e) => Number(e.amount) > 0 && houseIds.includes(Number(e.house_id))
+        );
+        if (unsettled.length === 0) continue;
+
+        list.push({
+          renter_id: renter.id,
+          renter_name: renter.name,
+          renter_phone: renter.phone,
+          renter_email: renter.email,
+          refund_due: unsettled.map((e) => ({
+            amount: parseFloat(e.amount),
+            flat_id: e.flat_id,
+            house_id: e.house_id,
+            flat_name: e.flat_name,
+            house_name: e.house_name,
+            removed_at: e.removed_at,
+            settled_at: e.settled_at,
+          })),
+          total_refund_due: unsettled.reduce((s, e) => s + parseFloat(e.amount || 0), 0),
+        });
+      }
+
+      return res.json({ success: true, data: list });
+    } catch (error) {
+      console.error("Get refund due error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to get refund due list",
+      });
+    }
+  }
+
+  // POST: Mark refund as settled (house owner refunded the renter; set amount to 0)
+  async settleRefund(req, res) {
+    try {
+      const userId = req.user.id;
+      const { renter_id, flat_id, house_id, notes } = req.body;
+
+      if (!renter_id || !flat_id || !house_id) {
+        return res.status(400).json({
+          success: false,
+          error: "renter_id, flat_id, and house_id are required",
+        });
+      }
+
+      const house = await db("house").where("id", house_id).first();
+      if (!house) {
+        return res.status(404).json({ success: false, error: "House not found" });
+      }
+
+      if (req.user.role.slug !== "web_owner" && req.user.role.slug !== "staff") {
+        if (house.ownerId !== userId) {
+          return res.status(403).json({ success: false, error: "Not your house" });
+        }
+      }
+
+      const renter = await db("renter").where("id", renter_id).first();
+      if (!renter) {
+        return res.status(404).json({ success: false, error: "Renter not found" });
+      }
+
+      let meta = {};
+      try {
+        meta = renter.metadata && typeof renter.metadata === "string"
+          ? JSON.parse(renter.metadata)
+          : renter.metadata || {};
+      } catch (e) {
+        meta = {};
+      }
+
+      const refundDue = Array.isArray(meta.refund_due) ? meta.refund_due : [];
+      const index = refundDue.findIndex(
+        (e) => Number(e.flat_id) === Number(flat_id) && Number(e.house_id) === Number(house_id) && Number(e.amount) > 0
+      );
+
+      if (index === -1) {
+        return res.status(400).json({
+          success: false,
+          error: "No unsettled refund due for this renter/flat/house",
+        });
+      }
+
+      refundDue[index] = {
+        ...refundDue[index],
+        amount: 0,
+        settled_at: new Date().toISOString(),
+        settled_by: userId,
+        notes: notes || refundDue[index].notes,
+      };
+      meta.refund_due = refundDue;
+
+      await db("renter")
+        .where("id", renter_id)
+        .update({
+          metadata: JSON.stringify(meta),
+          updatedAt: new Date(),
+        });
+
+      return res.json({
+        success: true,
+        message: "Refund marked as settled",
+        data: {
+          renter_id,
+          flat_id,
+          house_id,
+          settled_at: refundDue[index].settled_at,
+        },
+      });
+    } catch (error) {
+      console.error("Settle refund error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to settle refund",
       });
     }
   }

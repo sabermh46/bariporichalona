@@ -56,6 +56,7 @@ CREATE TABLE `rent_payment` (
     `house_id` BIGINT NOT NULL,
     `amount` DECIMAL(10, 2) NOT NULL,
     `due_date` DATE NOT NULL,
+    `for_month` VARCHAR(7) NULL,
     `paid_date` DATE NULL,
     `paid_amount` DECIMAL(10, 2) NULL,
     `payment_method` ENUM('cash', 'bank', 'mobile_banking', 'other') NULL,
@@ -76,6 +77,7 @@ CREATE TABLE `rent_payment` (
     INDEX `rent_payment_created_by_fkey`(`created_by`),
     INDEX `rent_payment_house_id_fkey`(`house_id`),
     INDEX `rent_payment_renter_id_fkey`(`renter_id`),
+    UNIQUE INDEX `idx_rent_payment_flat_for_month`(`flat_id`, `for_month`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
