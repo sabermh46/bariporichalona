@@ -404,34 +404,44 @@ class FinancialController {
         let targetYear, targetMonth;
         
         if (for_month && for_year) {
-          // Use provided month/year
-          targetYear = parseInt(for_year);
-          targetMonth = parseInt(for_month) - 1; // JavaScript months are 0-indexed
+          dueDate = new Date(parseInt(for_year), parseInt(for_month) - 1, dayOfMonth);
         } else if (for_month) {
-          // Use provided month with current year
-          targetYear = today.getFullYear();
-          targetMonth = parseInt(for_month) - 1;
-        } else {
-          // Default: next unpaid month
-          targetYear = today.getFullYear();
-          targetMonth = today.getMonth();
-          
-          // Start with current month's due date
-          dueDate = new Date(targetYear, targetMonth, dayOfMonth);
-          
-          // If the day has already passed this month, set for next month
-          if (dueDate < today) {
-            targetMonth += 1;
-            if (targetMonth > 11) {
-              targetMonth = 0;
-              targetYear += 1;
-            }
-            dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+          dueDate = new Date(today.getFullYear(), parseInt(for_month) - 1, dayOfMonth);
+        } else if (paid_date) {
+          // Use paid_date as intended due date when creating pending (e.g. paid_date: "2026-05-08" => May due)
+          const d = new Date(paid_date);
+          if (!isNaN(d.getTime())) {
+            dueDate = new Date(d.getFullYear(), d.getMonth(), dayOfMonth);
           }
         }
-        
-        if (!dueDate && targetYear && targetMonth !== undefined) {
-          dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+
+        // Default: first month without a record (next gap after latest existing)
+        if (!dueDate || isNaN(dueDate.getTime())) {
+          const latestForMonth = await db("rent_payment")
+            .where("flat_id", flat_id)
+            .whereNotNull("for_month")
+            .orderBy("for_month", "desc")
+            .select("for_month")
+            .first();
+
+          if (latestForMonth && latestForMonth.for_month) {
+            const [y, m] = latestForMonth.for_month.split("-").map(Number);
+            const nextMonth = m === 12 ? { year: y + 1, month: 1 } : { year: y, month: m + 1 };
+            dueDate = new Date(nextMonth.year, nextMonth.month - 1, dayOfMonth);
+          } else {
+            // No existing records: use next month from today
+            let targetYear = today.getFullYear();
+            let targetMonth = today.getMonth();
+            dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+            if (dueDate <= today) {
+              targetMonth += 1;
+              if (targetMonth > 11) {
+                targetMonth = 0;
+                targetYear += 1;
+              }
+              dueDate = new Date(targetYear, targetMonth, dayOfMonth);
+            }
+          }
         }
 
         // One record per flat per month: check by for_month (YYYY-MM)
@@ -466,13 +476,11 @@ class FinancialController {
       // Calculate total amount
       const totalAmount = baseRentAmount + amenitiesTotal + calculatedLateFee;
 
-      // Handle advance payment usage (deduct from advance, count toward total paid for the month)
+      // Fetch available advance (read-only; no mutation yet)
       let advancePaymentUsed = null;
-      const cashFromRenter = renter_paid_remaining != null && renter_paid_remaining !== ""
-        ? parseFloat(renter_paid_remaining)
-        : (parseFloat(paid_amount) || totalAmount);
+      let availableAdvance = null;
       if (use_advance_payment && currentPayment) {
-        const availableAdvance = await db("advance_payment")
+        availableAdvance = await db("advance_payment")
           .where("flat_id", flat_id)
           .andWhere("renter_id", currentPayment.renter_id)
           .andWhere("remaining_amount", ">", 0)
@@ -486,17 +494,7 @@ class FinancialController {
             remainingDue,
             totalAmount
           );
-
-          const newRemaining =
-            parseFloat(availableAdvance.remaining_amount) - useAmount;
-          await db("advance_payment")
-            .where("id", availableAdvance.id)
-            .update({
-              remaining_amount: newRemaining,
-              status: newRemaining > 0 ? "partially_used" : "fully_used",
-              updated_at: new Date(),
-            });
-
+          const newRemaining = parseFloat(availableAdvance.remaining_amount) - useAmount;
           advancePaymentUsed = {
             advance_payment_id: availableAdvance.id,
             amount: useAmount,
@@ -505,9 +503,23 @@ class FinancialController {
         }
       }
 
-      // Total paid for this month = existing paid (e.g. from apply-advance) + advance used this call + cash from renter
-      const existingPaid = currentPayment ? (parseFloat(currentPayment.paid_amount) || 0) : 0;
       const advanceUsedThisCall = advancePaymentUsed ? advancePaymentUsed.amount : 0;
+
+      // cashFromRenter: when renter_paid_remaining is set = additive cash. Else paid_amount = TOTAL for this payment.
+      // When use_advance and we used advance: paid_amount means total, so cash = total - advance (avoid double count).
+      let cashFromRenter;
+      if (renter_paid_remaining != null && renter_paid_remaining !== "") {
+        cashFromRenter = parseFloat(renter_paid_remaining);
+      } else if (use_advance_payment && advancePaymentUsed) {
+        // paid_amount from body = total for this payment; cash = total - advance used
+        const totalThisPayment = parseFloat(paid_amount) || totalAmount;
+        cashFromRenter = Math.max(0, totalThisPayment - advanceUsedThisCall);
+      } else {
+        cashFromRenter = parseFloat(paid_amount) || totalAmount;
+      }
+
+      // Total paid for this month = existing + advance used this call + cash from renter
+      const existingPaid = currentPayment ? (parseFloat(currentPayment.paid_amount) || 0) : 0;
       const totalPaidForMonth = existingPaid + advanceUsedThisCall + (Number.isFinite(cashFromRenter) ? cashFromRenter : 0);
 
       // Expected total for the period (base + amenities + late fee)
@@ -552,12 +564,23 @@ class FinancialController {
         },
       };
 
-      // Start transaction
+      // Start transaction (advance_payment update must be inside so rollback undoes it on failure)
       const trx = await db.transaction();
 
       try {
+        // Update advance_payment inside transaction - if rent_payment fails, this rolls back too
+        if (advancePaymentUsed && availableAdvance) {
+          await trx("advance_payment")
+            .where("id", availableAdvance.id)
+            .update({
+              remaining_amount: advancePaymentUsed.remaining,
+              status: advancePaymentUsed.remaining > 0 ? "partially_used" : "fully_used",
+              updated_at: new Date(),
+            });
+        }
+
         let paymentId;
-        
+
         if (currentPayment) {
           // Update existing payment (paid_amount = total for month: existing + advance + renter_paid_remaining)
           const updatePayload = {
