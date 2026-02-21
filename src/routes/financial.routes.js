@@ -2,72 +2,15 @@
 const express = require('express');
 const router = express.Router();
 
-const FlatController = require('../controllers/flat.controller');
 const FinancialController = require('../controllers/finantial.controller');
 const authMiddleware = require('../middleware/auth.middleware');
 const roleMiddleware = require('../middleware/role.middleware');
 const db = require('../config/knex');
-// Flat Management Routes
-router.get('/houses/:houseId/flats',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.getFlats
-);
 
-router.post('/houses/:houseId/flats',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.createFlat
-);
-
-router.get('/flats/:id',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.getFlatDetails
-);
-
-router.put('/flats/:id',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.updateFlat
-);
-
-router.delete('/flats/:id',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.deleteFlat
-);
-
-router.post('/flats/:id/renter',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.assignRenter
-);
-
-router.delete('/flats/:id/renter',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
-    FlatController.removeRenter
-);
-
-// Financial Routes
-router.get('/flats/:id/payments',
-    authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
-    async (req, res) => {
-        // Get payment history for specific flat
-        const { id } = req.params;
-        const payments = await db('rent_payment')
-            .where('flat_id', id)
-            .orderBy('due_date', 'desc')
-            .select('*');
-        res.json({ success: true, data: payments });
-    }
-);
-
+// Record rent payment for a flat (GET /flats/:id/payments is in flat.routes.js with pagination)
 router.post('/flats/:id/payments',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FinancialController.recordRentPayment
 );
 

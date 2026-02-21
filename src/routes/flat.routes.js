@@ -97,11 +97,7 @@ router.get('/flats/:id/payments',
     }
 );
 
-// router.post('/flats/:id/payments',
-//     authMiddleware,
-//     roleMiddleware(['house_owner', 'staff', 'web_owner']),
-//     FinancialController.recordRentPayment
-// );
+// POST /flats/:id/payments is in financial.routes.js (FinancialController.recordRentPayment)
 
 // Flat-specific financial routes
 router.get('/flats/:id/financial-summary',

@@ -643,6 +643,7 @@ class FinancialController {
           // Update flat's rent due date
           await trx("flat").where("id", flat_id).update({
             rent_due_date: dueDate,
+            next_payment_date: dueDate,
             updatedAt: new Date(),
           });
         }
