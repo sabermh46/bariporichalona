@@ -4,10 +4,30 @@ const db = require('../../config/knex');
 const router = express.Router();
 const authMiddleware = require('../../middleware/auth.middleware');
 const roleMiddleware = require('../../middleware/role.middleware');
+const EmailService = require('../../services/email.service');
 
 // Apply authentication and admin role middleware to all routes
 router.use(authMiddleware);
 router.use(roleMiddleware(['web_owner', 'developer']));
+
+// Email queue stats (must be before /:key)
+router.get('/email-stats', (req, res) => {
+    try {
+        const queueStats = EmailService.getQueueStats();
+        const workerStats = EmailService.getWorkerStats();
+        res.json({
+            success: true,
+            queue: queueStats,
+            workers: workerStats,
+        });
+    } catch (error) {
+        console.error('Error fetching email stats:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch email queue stats.',
+        });
+    }
+});
 
 // Get all system settings
 router.get('/', async (req, res) => {

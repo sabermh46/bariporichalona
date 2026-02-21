@@ -1,40 +1,30 @@
-// services/NotificationService.js
-const nodemailer = require('nodemailer');
+// services/NotificationService.js - uses working EmailService for email delivery
+const EmailService = require('./email.service');
 
 class NotificationService {
-    constructor() {
-        this.transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: process.env.SMTP_PORT || 587,
-            secure: process.env.SMTP_SECURE || false,
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            }
-        });
-    }
-
     async sendRentReminder(data) {
-        const { email, phone, renterName, flatNumber, houseName, amount, dueDate, daysBefore } = data;
+        const { email, phone, renterName, flatNumber, houseName, amount, dueDate, houseOwnerName } = data;
 
         const template = this.getTemplate('rent_reminder', {
             renter_name: renterName,
             flat_number: flatNumber,
             house_name: houseName,
             amount: amount,
-            due_date: dueDate.toLocaleDateString(),
-            days_before: daysBefore
+            due_date: dueDate ? (typeof dueDate === 'object' && dueDate.toLocaleDateString ? dueDate.toLocaleDateString() : String(dueDate)) : '',
+            house_owner_name: houseOwnerName || ''
         });
 
         const promises = [];
 
         if (email) {
             promises.push(
-                this.sendEmail({
-                    to: email,
-                    subject: template.email.subject,
-                    text: template.email.body,
-                    html: template.email.html
+                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, {
+                    type: 'rent_reminder',
+                    renterName,
+                    flatNumber,
+                    houseName,
+                    amount,
+                    dueDate: dueDate ? String(dueDate) : null
                 }).catch(err => console.error('Email send error:', err))
             );
         }
@@ -57,7 +47,7 @@ class NotificationService {
         const template = this.getTemplate('payment_receipt', {
             renter_name: renterName,
             amount: amount,
-            payment_date: paymentDate.toLocaleDateString(),
+            payment_date: paymentDate ? (typeof paymentDate === 'object' && paymentDate.toLocaleDateString ? paymentDate.toLocaleDateString() : paymentDate) : '',
             flat_number: flatNumber,
             house_name: houseName,
             transaction_id: transactionId
@@ -67,11 +57,13 @@ class NotificationService {
 
         if (email) {
             promises.push(
-                this.sendEmail({
-                    to: email,
-                    subject: template.email.subject,
-                    text: template.email.body,
-                    html: template.email.html
+                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, {
+                    type: 'payment_receipt',
+                    renterName,
+                    amount,
+                    flatNumber,
+                    houseName,
+                    transactionId
                 }).catch(err => console.error('Email send error:', err))
             );
         }
@@ -89,9 +81,32 @@ class NotificationService {
     }
 
     async sendExpenseApprovalRequest(data) {
-        // This would typically send to web_owner or house owner
-        // Implementation depends on your user structure
-        console.log('Expense approval requested:', data);
+        const { email, approverName, expenseAmount, description, houseName } = data;
+        const appName = process.env.APP_NAME || 'Bari Porichalona';
+        if (email) {
+            const subject = `Expense Approval Request: ${expenseAmount} for ${houseName || 'House'}`;
+            const html = `
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;">
+                    <div style="background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
+                        <h2 style="margin: 0; font-size: 20px;">Expense Approval Request</h2>
+                    </div>
+                    <div style="padding: 24px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                        <p>Dear <strong>${approverName || 'there'}</strong>,</p>
+                        <p>An expense approval has been requested for review.</p>
+                        <p><strong>Amount:</strong> ${expenseAmount}<br><strong>Description:</strong> ${description || 'N/A'}<br><strong>House:</strong> ${houseName || 'N/A'}</p>
+                        <p>Please log in to review and approve or reject.</p>
+                        <p>Best regards,<br><strong>${appName}</strong></p>
+                        ${this._footer()}
+                    </div>
+                </div>
+            `;
+            await EmailService.sendEmail(email, subject, html, null, {
+                type: 'expense_approval',
+                expenseAmount,
+                description,
+                houseName
+            }).catch(err => console.error('Email send error:', err));
+        }
     }
 
     async sendAppFeeReceipt(data) {
@@ -100,31 +115,20 @@ class NotificationService {
         const template = this.getTemplate('app_fee_receipt', {
             owner_name: houseOwnerName,
             amount: amount,
-            fee_type: feeType,
-            payment_date: paymentDate.toLocaleDateString(),
+            fee_type: feeType || 'monthly_subscription',
+            payment_date: paymentDate ? (typeof paymentDate === 'object' && paymentDate.toLocaleDateString ? paymentDate.toLocaleDateString() : paymentDate) : '',
             house_name: houseName
         });
 
         if (houseOwnerEmail) {
-            await this.sendEmail({
-                to: houseOwnerEmail,
-                subject: template.email.subject,
-                text: template.email.body,
-                html: template.email.html
+            await EmailService.sendEmail(houseOwnerEmail, template.email.subject, template.email.html, template.email.body, {
+                type: 'app_fee_receipt',
+                houseOwnerName,
+                amount,
+                feeType,
+                houseName
             }).catch(err => console.error('Email send error:', err));
         }
-    }
-
-    async sendEmail({ to, subject, text, html }) {
-        const mailOptions = {
-            from: process.env.SMTP_FROM || '"Rental Management" <noreply@example.com>',
-            to,
-            subject,
-            text,
-            html: html || text
-        };
-
-        return this.transporter.sendMail(mailOptions);
     }
 
     async sendSMS({ to, message }) {
@@ -139,37 +143,72 @@ class NotificationService {
         // });
     }
 
+    _footer() {
+        return `<p style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #6b7280;">This mail is sent from Bariporichalona.com</p>`;
+    }
+
     getTemplate(type, data) {
+        const appName = process.env.APP_NAME || 'Bari Porichalona';
         const templates = {
             rent_reminder: {
                 email: {
-                    subject: `Rent Reminder: ${data.amount} due in ${data.days_before} days`,
-                    body: `Dear ${data.renter_name},\n\nThis is a reminder that your rent payment of ${data.amount} for ${data.house_name} - Flat ${data.flat_number} is due on ${data.due_date}.\n\nPlease ensure payment is made on time to avoid late fees.\n\nBest regards,\nManagement`,
-                    html: `<div style="font-family: Arial, sans-serif; max-width: 600px;">
-                        <h2>Rent Reminder</h2>
-                        <p>Dear ${data.renter_name},</p>
-                        <p>This is a reminder that your rent payment of <strong>${data.amount}</strong> for <strong>${data.house_name} - Flat ${data.flat_number}</strong> is due on <strong>${data.due_date}</strong>.</p>
-                        <p>Please ensure payment is made on time to avoid late fees.</p>
-                        <p>Best regards,<br>Management</p>
+                    subject: `Rent Reminder: ${data.amount} due on ${data.due_date || 'due date'}`,
+                    body: `Dear ${data.renter_name},\n\nThis is a reminder that your rent payment of ${data.amount} for ${data.house_name} - Flat ${data.flat_number} is due on ${data.due_date}.\n\n${data.house_owner_name ? `From: ${data.house_owner_name}\n\n` : ''}Please ensure payment is made on time to avoid late fees.\n\nBest regards,\n${appName}\n\nThis mail is sent from Bariporichalona.com`,
+                    html: `<div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;">
+                        <div style="background: linear-gradient(135deg,rgb(190, 111, 68) 0%,rgb(216, 171, 98) 100%); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
+                            <h2 style="margin: 0; font-size: 20px;">Rent Reminder</h2>
+                        </div>
+                        <div style="padding: 24px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                            <p>Dear <strong>${data.renter_name}</strong>,</p>
+                            <p>This is a reminder that your rent payment of <strong>${data.amount}</strong> for <strong>${data.house_name} - Flat ${data.flat_number}</strong> is due on <strong>${data.due_date}</strong>.</p>
+                            ${data.house_owner_name ? `<p style="color: #4b5563;">From: <strong>${data.house_owner_name}</strong></p>` : ''}
+                            <p>Please ensure payment is made on time to avoid late fees.</p>
+                            <p>Best regards,<br><strong>${appName}</strong></p>
+                            ${this._footer()}
+                        </div>
                     </div>`
                 },
                 sms: `Rent Reminder: ${data.amount} for ${data.house_name} due on ${data.due_date}. Please pay on time.`
             },
             payment_receipt: {
                 email: {
-                    subject: `Payment Receipt: ${data.amount}`,
-                    body: `Dear ${data.renter_name},\n\nThank you for your payment of ${data.amount} for ${data.house_name} - Flat ${data.flat_number}.\n\nPayment Date: ${data.payment_date}\nTransaction ID: ${data.transaction_id || 'N/A'}\n\nBest regards,\nManagement`,
-                    html: `<div style="font-family: Arial, sans-serif; max-width: 600px;">
-                        <h2>Payment Receipt</h2>
-                        <p>Dear ${data.renter_name},</p>
-                        <p>Thank you for your payment of <strong>${data.amount}</strong> for <strong>${data.house_name} - Flat ${data.flat_number}</strong>.</p>
-                        <p><strong>Payment Date:</strong> ${data.payment_date}<br>
-                        <strong>Transaction ID:</strong> ${data.transaction_id || 'N/A'}</p>
-                        <p>Best regards,<br>Management</p>
+                    subject: `Payment Receipt: ${data.amount} - ${data.house_name || 'Rent Payment'}`,
+                    body: `Dear ${data.renter_name},\n\nThank you for your payment of ${data.amount} for ${data.house_name} - Flat ${data.flat_number}.\n\nPayment Date: ${data.payment_date}\nTransaction ID: ${data.transaction_id || 'N/A'}\n\nBest regards,\n${appName}\n\nThis mail is sent from Bariporichalona.com`,
+                    html: `<div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;">
+                        <div style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
+                            <h2 style="margin: 0; font-size: 20px;">Payment Receipt</h2>
+                        </div>
+                        <div style="padding: 24px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                            <p>Dear <strong>${data.renter_name}</strong>,</p>
+                            <p>Thank you for your payment of <strong>${data.amount}</strong> for <strong>${data.house_name} - Flat ${data.flat_number}</strong>.</p>
+                            <p><strong>Payment Date:</strong> ${data.payment_date}<br><strong>Transaction ID:</strong> ${data.transaction_id || 'N/A'}</p>
+                            <p>Best regards,<br><strong>${appName}</strong></p>
+                            ${this._footer()}
+                        </div>
                     </div>`
                 },
                 sms: `Payment Receipt: ${data.amount} paid for ${data.house_name}. Thank you!`
             }
+        };
+
+        templates.app_fee_receipt = {
+            email: {
+                subject: `App Fee Receipt: ${data.amount} - ${data.fee_type || 'Subscription'}`,
+                body: `Dear ${data.owner_name},\n\nThank you for your payment of ${data.amount} (${data.fee_type || 'subscription'}) for ${data.house_name || 'your house'}.\n\nPayment Date: ${data.payment_date}\n\nBest regards,\n${appName}\n\nThis mail is sent from Bariporichalona.com`,
+                html: `<div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;">
+                    <div style="background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
+                        <h2 style="margin: 0; font-size: 20px;">App Fee Receipt</h2>
+                    </div>
+                    <div style="padding: 24px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                        <p>Dear <strong>${data.owner_name}</strong>,</p>
+                        <p>Thank you for your payment of <strong>${data.amount}</strong> for <strong>${data.fee_type || 'subscription'}</strong> — ${data.house_name || 'your property'}.</p>
+                        <p><strong>Payment Date:</strong> ${data.payment_date}</p>
+                        <p>Best regards,<br><strong>${appName}</strong></p>
+                        ${this._footer()}
+                    </div>
+                </div>`
+            },
+            sms: `Payment Receipt: ${data.amount} received for ${data.fee_type || 'subscription'}. Thank you!`
         };
 
         return templates[type] || templates.rent_reminder;

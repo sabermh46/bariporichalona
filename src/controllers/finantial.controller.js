@@ -1812,93 +1812,126 @@ class FinancialController {
     }
   }
 
-  // 6. Send rent reminders
+  // 6. Send rent reminder instantly for a specific flat
+  // Body: { flat_id, houseId }
   async sendRentReminders(req, res) {
     try {
-      const { daysBefore = 3, houseId } = req.body;
+      const { flat_id, houseId } = req.body;
       const userId = req.user.id;
 
-      // Check permission
-      if (req.user.role.slug !== "web_owner") {
-        if (houseId) {
-          const hasAccess = await this.checkHouseAccess(userId, houseId);
-          if (!hasAccess) {
-            return res.status(403).json({
-              success: false,
-              error:
-                "You do not have permission to send reminders for this house",
-            });
-          }
-        }
+      if (!flat_id || !houseId) {
+        return res.status(400).json({
+          success: false,
+          error: "flat_id and houseId are required",
+        });
       }
 
-      // Calculate reminder date
-      const reminderDate = new Date();
-      reminderDate.setDate(reminderDate.getDate() + parseInt(daysBefore));
-
-      // Get payments due on reminder date
-      let query = db("rent_payment")
-        .join("flat", "rent_payment.flat_id", "flat.id")
-        .join("renter", "rent_payment.renter_id", "renter.id")
-        .join("house", "rent_payment.house_id", "house.id")
-        .where("rent_payment.status", "pending")
-        .andWhere("rent_payment.due_date", "<=", reminderDate)
-        .andWhere("rent_payment.due_date", ">=", new Date())
+      // Get flat with house, owner, and renter
+      const flat = await db("flat")
+        .join("house", "flat.house_id", "house.id")
+        .leftJoin("user as house_owner", "house.ownerId", "house_owner.id")
+        .leftJoin("renter", "flat.renter_id", "renter.id")
+        .where("flat.id", flat_id)
+        .andWhere("flat.house_id", houseId)
         .select(
-          "rent_payment.*",
-          "flat.number as flatNumber",
-          "flat.rent_amount",
+          "flat.*",
+          "house.id as house_id",
+          "house.name as houseName",
+          "house.ownerId",
+          "house_owner.name as houseOwnerName",
+          "renter.id as renter_id",
           "renter.name as renterName",
           "renter.email as renterEmail",
           "renter.phone as renterPhone",
-          "house.name as houseName"
-        );
+          "renter.alternativePhone as renterAlternativePhone"
+        )
+        .first();
 
-      if (houseId) {
-        query.andWhere("rent_payment.house_id", houseId);
+      if (!flat) {
+        return res.status(404).json({
+          success: false,
+          error: "Flat not found or does not belong to this house",
+        });
       }
 
-      const payments = await query;
-
-      const results = [];
-      const errors = [];
-
-      for (const payment of payments) {
-        try {
-          await NotificationService.sendRentReminder({
-            renterName: payment.renterName,
-            email: payment.renterEmail,
-            phone: payment.renterPhone,
-            flatNumber: payment.flatNumber,
-            houseName: payment.houseName,
-            amount: payment.amount,
-            dueDate: payment.due_date,
-            daysBefore: parseInt(daysBefore),
-          });
-
-          results.push({
-            paymentId: payment.id,
-            renterName: payment.renterName,
-            sent: true,
-          });
-        } catch (error) {
-          errors.push({
-            paymentId: payment.id,
-            renterName: payment.renterName,
-            error: error.message,
+      // Check permission (house_owner must own this house)
+      if (req.user.role.slug !== "web_owner" && req.user.role.slug !== "staff") {
+        const hasAccess = await this.checkHouseAccess(userId, houseId);
+        if (!hasAccess) {
+          return res.status(403).json({
+            success: false,
+            error: "You do not have permission to send reminders for this house",
           });
         }
       }
 
-      return res.json({
-        success: true,
-        data: {
-          remindersSent: results.length,
-          results,
-          errors: errors.length > 0 ? errors : undefined,
-        },
-        message: `Sent ${results.length} rent reminders`,
-      });
+      // Must have a renter
+      if (!flat.renter_id) {
+        return res.status(400).json({
+          success: false,
+          error: "No renter assigned to this flat",
+        });
+      }
+
+      // Get pending rent payment(s) for this flat
+      const pendingPayment = await db("rent_payment")
+        .where("flat_id", flat_id)
+        .andWhere("status", "pending")
+        .orderBy("due_date", "asc")
+        .first();
+
+      if (!pendingPayment) {
+        return res.status(400).json({
+          success: false,
+          error: "No pending rent payment for this flat",
+        });
+      }
+
+      // Send email if renter has email
+      const emailToUse = flat.renterEmail || null;
+      const phoneToUse = flat.renterPhone || flat.renterAlternativePhone || null;
+
+      if (!emailToUse && !phoneToUse) {
+        return res.status(400).json({
+          success: false,
+          error: "Renter has no email or phone to send reminder to",
+        });
+      }
+
+      try {
+        await NotificationService.sendRentReminder({
+          renterName: flat.renterName,
+          email: emailToUse,
+          phone: phoneToUse,
+          flatNumber: flat.number,
+          houseName: flat.houseName,
+          amount: pendingPayment.amount,
+          dueDate: pendingPayment.due_date,
+          houseOwnerName: flat.houseOwnerName || null,
+        });
+
+        return res.json({
+          success: true,
+          data: {
+            remindersSent: 1,
+            results: [
+              {
+                paymentId: pendingPayment.id,
+                renterName: flat.renterName,
+                sent: true,
+                sentTo: emailToUse ? (phoneToUse ? "email,sms" : "email") : "sms",
+              },
+            ],
+          },
+          message: "Rent reminder sent successfully",
+        });
+      } catch (sendError) {
+        console.error("Send rent reminder error:", sendError);
+        return res.status(500).json({
+          success: false,
+          error: "Failed to send rent reminder",
+        });
+      }
     } catch (error) {
       console.error("Send rent reminders error:", error);
       return res.status(500).json({

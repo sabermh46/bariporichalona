@@ -1,72 +1,105 @@
 // src/services/email.service.js
-const nodemailer = require('nodemailer');
-const db = require('../config/knex');
+const { getEmailWorkerPool } = require('../utils/emailWorkerPool');
+
+const MAX_RETRIES = 3;
+const CONCURRENT_SENDS = 2;
 
 class EmailService {
-    constructor() {
-        this.transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: process.env.SMTP_PORT,
-            secure: process.env.SMTP_SECURE === 'true',
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            }
-        });
-    }
+  constructor() {
+    this.queue = [];
+    this.processing = new Set();
+    this.stats = { queued: 0, sent: 0, failed: 0 };
+    this._jobId = 0;
+  }
 
-    async sendEmail(to, subject, html, text = null, metadata = {}) {
-        try {
-            const mailOptions = {
-                from: `"${process.env.APP_NAME}" <${process.env.SMTP_FROM}>`,
-                to,
-                subject,
-                html,
-                text: text || html.replace(/<[^>]*>/g, '')
-            };
+  _nextId() {
+    return `email-${Date.now()}-${++this._jobId}`;
+  }
 
-            const info = await this.transporter.sendMail(mailOptions);
-            
-            // Log the email
-            await db('emaillog').insert({
-                type: metadata.type || 'general',
-                toEmail: to,
-                subject,
-                content: html,
-                status: 'sent',
-                metadata: JSON.stringify({
-                    ...metadata,
-                    messageId: info.messageId,
-                    envelope: info.envelope
-                }),
-                sentAt: new Date()
-            });
+  _createJob(to, subject, html, text, metadata) {
+    return {
+      id: this._nextId(),
+      to,
+      subject,
+      html,
+      text: text || null,
+      metadata: metadata || {},
+      retryCount: 0,
+    };
+  }
 
-            return { success: true, messageId: info.messageId };
-        } catch (error) {
-            console.error('Email send error:', error);
-            
-            // Log failed email
-            await db('emaillog').insert({
-                type: metadata.type || 'general',
-                toEmail: to,
-                subject,
-                content: html,
-                status: 'failed',
-                error: error.message,
-                metadata: JSON.stringify(metadata),
-                sentAt: new Date()
-            });
+  /**
+   * Queue an email for delivery (non-blocking).
+   * Returns immediately with { queued: true, id }.
+   */
+  queueEmail(to, subject, html, text = null, metadata = {}) {
+    const job = this._createJob(to, subject, html, text, metadata);
+    this.queue.push(job);
+    this.stats.queued++;
+    this._processQueue();
+    return { queued: true, id: job.id };
+  }
 
-            throw error;
-        }
-    }
+  /**
+   * Send email (default: queued, fire-and-forget).
+   * For backward compatibility - callers get { queued: true, id }.
+   */
+  async sendEmail(to, subject, html, text = null, metadata = {}) {
+    return this.queueEmail(to, subject, html, text, metadata);
+  }
 
-    async sendPasswordResetEmail(email, resetToken, name = null) {
-        const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
-        const subject = 'Reset Your Password';
-        
-        const html = `
+  async _processQueue() {
+    if (this.processing.size >= CONCURRENT_SENDS || this.queue.length === 0) return;
+
+    const job = this.queue.shift();
+    this.processing.add(job.id);
+
+    const pool = getEmailWorkerPool();
+
+    pool.execute('sendEmail', {
+      to: job.to,
+      subject: job.subject,
+      html: job.html,
+      text: job.text,
+      metadata: job.metadata,
+    }).then((result) => {
+      this.stats.sent++;
+      console.log('Email sent to', job.to, result?.messageId || '');
+    }).catch((err) => {
+      if (job.retryCount < MAX_RETRIES) {
+        job.retryCount++;
+        this.queue.unshift(job);
+        console.warn(`Email retry ${job.retryCount}/${MAX_RETRIES} for ${job.to}:`, err.message);
+      } else {
+        this.stats.failed++;
+        console.error('Email failed after retries:', job.to, err.message);
+      }
+    }).finally(() => {
+      this.processing.delete(job.id);
+      this._processQueue();
+    });
+  }
+
+  /** Queue stats for monitoring */
+  getQueueStats() {
+    return {
+      queued: this.queue.length,
+      processing: this.processing.size,
+      sent: this.stats.sent,
+      failed: this.stats.failed,
+    };
+  }
+
+  /** Worker pool stats (workers, queue length, etc.) */
+  getWorkerStats() {
+    return getEmailWorkerPool().getStats();
+  }
+
+  async sendPasswordResetEmail(email, resetToken, name = null) {
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
+    const subject = 'Reset Your Password';
+
+    const html = `
             <!DOCTYPE html>
             <html>
             <head>
@@ -134,17 +167,17 @@ class EmailService {
             </html>
         `;
 
-        return this.sendEmail(email, subject, html, null, {
-            type: 'password_reset',
-            resetToken: resetToken.substring(0, 10) + '...', // Store partial token
-            name: name
-        });
-    }
+    return this.sendEmail(email, subject, html, null, {
+      type: 'password_reset',
+      resetToken: resetToken.substring(0, 10) + '...',
+      name: name,
+    });
+  }
 
-    async sendPasswordChangedEmail(email, name = null) {
-        const subject = 'Password Changed Successfully';
-        
-        const html = `
+  async sendPasswordChangedEmail(email, name = null) {
+    const subject = 'Password Changed Successfully';
+
+    const html = `
             <!DOCTYPE html>
             <html>
             <head>
@@ -194,11 +227,11 @@ class EmailService {
             </html>
         `;
 
-        return this.sendEmail(email, subject, html, null, {
-            type: 'password_changed',
-            name: name
-        });
-    }
+    return this.sendEmail(email, subject, html, null, {
+      type: 'password_changed',
+      name: name,
+    });
+  }
 }
 
 module.exports = new EmailService();
