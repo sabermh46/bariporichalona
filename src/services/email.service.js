@@ -33,7 +33,8 @@ class EmailService {
    * Returns immediately with { queued: true, id }.
    */
   queueEmail(to, subject, html, text = null, metadata = {}) {
-    const job = this._createJob(to, subject, html, text, metadata);
+    const safeMetadata = metadata && typeof metadata === 'object' ? { ...metadata } : {};
+    const job = this._createJob(to, subject, html, text, safeMetadata);
     this.queue.push(job);
     this.stats.queued++;
     this._processQueue();
@@ -42,9 +43,18 @@ class EmailService {
 
   /**
    * Send email (default: queued, fire-and-forget).
-   * For backward compatibility - callers get { queued: true, id }.
+   * metadata may include: type, table_name, row_id (for emaillog tracking), and other fields.
    */
   async sendEmail(to, subject, html, text = null, metadata = {}) {
+    if (!to || typeof to !== 'string') {
+      throw new Error('EmailService.sendEmail: "to" is required and must be a string');
+    }
+    if (!subject || typeof subject !== 'string') {
+      throw new Error('EmailService.sendEmail: "subject" is required and must be a string');
+    }
+    if (!html && html !== '') {
+      throw new Error('EmailService.sendEmail: "html" is required');
+    }
     return this.queueEmail(to, subject, html, text, metadata);
   }
 

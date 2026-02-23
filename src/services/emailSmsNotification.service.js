@@ -3,12 +3,15 @@ const EmailService = require('./email.service');
 
 class NotificationService {
     async sendRentReminder(data) {
-        const { email, phone, renterName, flatNumber, houseName, amount, dueDate, houseOwnerName } = data;
+        const { email, phone, renterName, flatNumber, houseName, amount, dueDate, houseOwnerName, flatId, houseId, renterId, table_name, row_id } = data;
 
         const template = this.getTemplate('rent_reminder', {
             renter_name: renterName,
             flat_number: flatNumber,
             house_name: houseName,
+            flat_id: flatId,
+            house_id: houseId,
+            renter_id: renterId,
             amount: amount,
             due_date: dueDate ? (typeof dueDate === 'object' && dueDate.toLocaleDateString ? dueDate.toLocaleDateString() : String(dueDate)) : '',
             house_owner_name: houseOwnerName || ''
@@ -17,15 +20,22 @@ class NotificationService {
         const promises = [];
 
         if (email) {
+            const metadata = {
+                type: 'rent_reminder',
+                renterName,
+                flatNumber,
+                houseName,
+                amount,
+                flat_id: flatId,
+                house_id: houseId,
+                renter_id: renterId,
+                dueDate: dueDate ? String(dueDate) : null
+            };
+            if (table_name) metadata.table_name = table_name;
+            if (row_id != null) metadata.row_id = row_id;
             promises.push(
-                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, {
-                    type: 'rent_reminder',
-                    renterName,
-                    flatNumber,
-                    houseName,
-                    amount,
-                    dueDate: dueDate ? String(dueDate) : null
-                }).catch(err => console.error('Email send error:', err))
+                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, metadata)
+                    .catch(err => console.error('Email send error:', err))
             );
         }
 
@@ -42,7 +52,7 @@ class NotificationService {
     }
 
     async sendPaymentReceipt(data) {
-        const { email, phone, renterName, amount, paymentDate, flatNumber, houseName, transactionId } = data;
+        const { email, phone, renterName, amount, paymentDate, flatNumber, houseName, transactionId, table_name, row_id } = data;
 
         const template = this.getTemplate('payment_receipt', {
             renter_name: renterName,
@@ -56,15 +66,19 @@ class NotificationService {
         const promises = [];
 
         if (email) {
+            const metadata = {
+                type: 'payment_receipt',
+                renterName,
+                amount,
+                flatNumber,
+                houseName,
+                transactionId,
+            };
+            if (table_name) metadata.table_name = table_name;
+            if (row_id != null) metadata.row_id = row_id;
             promises.push(
-                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, {
-                    type: 'payment_receipt',
-                    renterName,
-                    amount,
-                    flatNumber,
-                    houseName,
-                    transactionId
-                }).catch(err => console.error('Email send error:', err))
+                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, metadata)
+                    .catch(err => console.error('Email send error:', err))
             );
         }
 

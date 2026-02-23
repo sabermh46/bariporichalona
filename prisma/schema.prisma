@@ -453,6 +453,8 @@ model emaillog {
   status      String    @default("sent") @db.VarChar(20)
   error       String?
   metadata    String?   @db.LongText
+  table_name  String?   @db.VarChar(100)
+  row_id      BigInt?
   sentAt      DateTime  @default(now())
   deliveredAt DateTime?
   openedAt    DateTime?
@@ -460,6 +462,7 @@ model emaillog {
   @@index([toEmail], map: "EmailLog_toEmail_idx")
   @@index([type], map: "EmailLog_type_idx")
   @@index([sentAt], map: "EmailLog_sentAt_idx")
+  @@index([table_name, row_id], map: "EmailLog_table_row_idx")
 }
 
 model rolepermission {

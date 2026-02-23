@@ -36,6 +36,9 @@ parentPort.on('message', async ({ taskId, task, data }) => {
     }
 
     const { to, subject, html, text, metadata = {} } = data;
+    const tableName = metadata.table_name || null;
+    const rowId = metadata.row_id != null ? BigInt(metadata.row_id) : null;
+
     const mailOptions = {
       from: `"${process.env.APP_NAME || 'App'}" <${process.env.SMTP_FROM}>`,
       to,
@@ -46,14 +49,19 @@ parentPort.on('message', async ({ taskId, task, data }) => {
 
     const info = await transporter.sendMail(mailOptions);
 
+    const logMetadata = { ...metadata };
+    delete logMetadata.table_name;
+    delete logMetadata.row_id;
     await db('emaillog').insert({
       type: metadata.type || 'general',
       toEmail: to,
       subject,
       content: html,
       status: 'sent',
+      table_name: tableName,
+      row_id: rowId,
       metadata: JSON.stringify({
-        ...metadata,
+        ...logMetadata,
         messageId: info.messageId,
         envelope: info.envelope,
       }),
@@ -63,14 +71,20 @@ parentPort.on('message', async ({ taskId, task, data }) => {
   } catch (error) {
     const { to, subject, html, metadata = {} } = data || {};
     try {
+      const failMetadata = data?.metadata || {};
+      const logMeta = { ...failMetadata };
+      delete logMeta.table_name;
+      delete logMeta.row_id;
       await db('emaillog').insert({
-        type: metadata.type || 'general',
+        type: failMetadata.type || 'general',
         toEmail: to || 'unknown',
         subject: subject || '(no subject)',
         content: html || null,
         status: 'failed',
         error: error.message,
-        metadata: metadata ? JSON.stringify(metadata) : null,
+        table_name: failMetadata.table_name || null,
+        row_id: failMetadata.row_id != null ? BigInt(failMetadata.row_id) : null,
+        metadata: Object.keys(logMeta).length ? JSON.stringify(logMeta) : null,
       });
     } catch (logErr) {
       console.error('Failed to log email error:', logErr);

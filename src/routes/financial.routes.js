@@ -158,6 +158,18 @@ router.get('/financial/monthly-profit', authMiddleware, FinancialController.calc
 router.get('/financial/profit-report', authMiddleware, FinancialController.getProfitReport);
 
 // Refund due (advance remaining at renter removal): list and settle
+router.get('/financial/payment-receipts',
+  authMiddleware,
+  roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+  FinancialController.listPaymentReceipts
+);
+
+router.post('/financial/resend-payment-receipt',
+  authMiddleware,
+  roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+  FinancialController.resendPaymentReceipt
+);
+
 router.get('/financial/refund-due',
   authMiddleware,
   roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),

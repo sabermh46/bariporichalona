@@ -6,6 +6,7 @@ const CaretakerPermissionService = require('../services/CaretakerPermission.serv
 const HouseController = require('./house.controller');
 const permissionService = require('../services/permission.service');
 const accessCache = require('../utils/accessCache');
+const { serializeBigInt } = require('../utils/serializer');
 class FinancialController {
   constructor() {
     // bind all to fix the this.function() reading indefined
@@ -22,6 +23,8 @@ class FinancialController {
     this.updateRentPayment = this.updateRentPayment.bind(this);
     this.getRefundDue = this.getRefundDue.bind(this);
     this.settleRefund = this.settleRefund.bind(this);
+    this.resendPaymentReceipt = this.resendPaymentReceipt.bind(this);
+    this.listPaymentReceipts = this.listPaymentReceipts.bind(this);
   }
 
   async calculateMonthlyProfit(req, res) {
@@ -740,6 +743,8 @@ class FinancialController {
               flatNumber: flat.number,
               houseName: flat.houseName,
               transactionId: transaction_id,
+              table_name: 'rent_payment',
+              row_id: paymentId,
               breakdown: {
                 baseRent: baseRentAmount,
                 amenities: amenitiesTotal,
@@ -1900,6 +1905,9 @@ class FinancialController {
 
       try {
         await NotificationService.sendRentReminder({
+          flatId: flat.id,
+          houseId: flat.house_id,
+          renterId: flat.renter_id,
           renterName: flat.renterName,
           email: emailToUse,
           phone: phoneToUse,
@@ -1908,6 +1916,8 @@ class FinancialController {
           amount: pendingPayment.amount,
           dueDate: pendingPayment.due_date,
           houseOwnerName: flat.houseOwnerName || null,
+          table_name: 'rent_payment',
+          row_id: pendingPayment.id,
         });
 
         return res.json({
@@ -1937,6 +1947,157 @@ class FinancialController {
       return res.status(500).json({
         success: false,
         error: "Failed to send rent reminders",
+      });
+    }
+  }
+
+  // Resend payment receipt for a rent payment (house_owner/staff/web_owner/caretaker with house access)
+  async resendPaymentReceipt(req, res) {
+    try {
+      const { rent_payment_id } = req.body;
+      const userId = req.user.id;
+
+      if (!rent_payment_id) {
+        return res.status(400).json({
+          success: false,
+          error: 'rent_payment_id is required',
+        });
+      }
+
+      const payment = await db('rent_payment')
+        .join('flat', 'rent_payment.flat_id', 'flat.id')
+        .join('house', 'rent_payment.house_id', 'house.id')
+        .leftJoin('renter', 'rent_payment.renter_id', 'renter.id')
+        .where('rent_payment.id', rent_payment_id)
+        .select(
+          'rent_payment.*',
+          'flat.number as flat_number',
+          'house.name as house_name',
+          'house.id as house_id',
+          'renter.name as renter_name',
+          'renter.email as renter_email',
+          'renter.phone as renter_phone'
+        )
+        .first();
+
+      if (!payment) {
+        return res.status(404).json({
+          success: false,
+          error: 'Rent payment not found',
+        });
+      }
+
+      if (payment.status !== 'paid') {
+        return res.status(400).json({
+          success: false,
+          error: 'Cannot resend receipt: payment is not paid',
+        });
+      }
+
+      if (!payment.renter_email) {
+        return res.status(400).json({
+          success: false,
+          error: 'Renter has no email; cannot send receipt',
+        });
+      }
+
+      // Permission: web_owner has full access; others must have house access
+      if (req.user.role.slug !== 'web_owner') {
+        const hasAccess = await this.checkHouseAccess(userId, payment.house_id);
+        if (!hasAccess) {
+          return res.status(403).json({
+            success: false,
+            error: 'You do not have permission for this house',
+          });
+        }
+      }
+
+      await NotificationService.sendPaymentReceipt({
+        renterName: payment.renter_name,
+        email: payment.renter_email,
+        phone: payment.renter_phone || null,
+        amount: payment.paid_amount,
+        paymentDate: payment.paid_date,
+        flatNumber: payment.flat_number,
+        houseName: payment.house_name,
+        transactionId: payment.transaction_id || null,
+        table_name: 'rent_payment',
+        row_id: payment.id,
+      });
+
+      return res.json({
+        success: true,
+        message: 'Payment receipt has been queued for delivery',
+      });
+    } catch (error) {
+      console.error('Resend payment receipt error:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to resend payment receipt',
+      });
+    }
+  }
+
+  // List payment receipts for a flat (emaillog entries with table_name=rent_payment, row_id in flat's payments)
+  async listPaymentReceipts(req, res) {
+    try {
+      const { flat_id } = req.query;
+      const userId = req.user.id;
+
+      if (!flat_id) {
+        return res.status(400).json({
+          success: false,
+          error: 'flat_id is required',
+        });
+      }
+
+      const flat = await db('flat').where('id', flat_id).select('id', 'house_id').first();
+      if (!flat) {
+        return res.status(404).json({
+          success: false,
+          error: 'Flat not found',
+        });
+      }
+
+      // Permission
+      if (req.user.role.slug !== 'web_owner') {
+        const hasAccess = await this.checkHouseAccess(userId, flat.house_id);
+        if (!hasAccess) {
+          return res.status(403).json({
+            success: false,
+            error: 'You do not have permission for this flat',
+          });
+        }
+      }
+
+      const paymentIds = await db('rent_payment')
+        .where('flat_id', flat_id)
+        .pluck('id');
+
+      if (paymentIds.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          message: 'No rent payments found for this flat',
+        });
+      }
+
+      const receipts = await db('emaillog')
+        .whereIn('type', ['payment_receipt', 'rent_reminder'])
+        .where('table_name', 'rent_payment')
+        .whereIn('row_id', paymentIds)
+        .orderBy('sentAt', 'desc')
+        .select('id', 'toEmail', 'subject', 'status', 'error', 'table_name', 'row_id', 'sentAt', 'metadata');
+
+      return res.json({
+        success: true,
+        data: serializeBigInt(receipts),
+      });
+    } catch (error) {
+      console.error('List payment receipts error:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to list payment receipts',
       });
     }
   }
