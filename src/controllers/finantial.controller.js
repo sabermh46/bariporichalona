@@ -586,11 +586,18 @@ class FinancialController {
 
         if (currentPayment) {
           // Update existing payment (paid_amount = total for month: existing + advance + renter_paid_remaining)
+          const existingAdvanceUsed =
+            currentPayment.advance_used != null
+              ? parseFloat(currentPayment.advance_used)
+              : 0;
+          const newAdvanceUsed = existingAdvanceUsed + advanceUsedThisCall;
+
           const updatePayload = {
             paid_date: finalStatus === "pending" ? null : actualPaidDate,
             paid_amount: finalStatus === "pending" ? 0 : totalPaidForMonth,
             base_amount: baseRentAmount,
             amenities_charge: amenitiesTotal,
+            advance_used: newAdvanceUsed,
             payment_method,
             transaction_id,
             late_fee_amount: calculatedLateFee,
@@ -629,6 +636,7 @@ class FinancialController {
             paid_amount: 0,
             base_amount: baseRentAmount,
             amenities_charge: amenitiesTotal,
+            advance_used: 0,
             payment_method: null,
             transaction_id: null,
             status: "pending",

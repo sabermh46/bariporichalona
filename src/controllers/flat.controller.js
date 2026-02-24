@@ -15,6 +15,9 @@ class FlatController {
     this.getFlatDetails = this.getFlatDetails.bind(this);
     this.applyAdvancePayment = this.applyAdvancePayment.bind(this);
     this.getFlatAdvancePayments = this.getFlatAdvancePayments.bind(this);
+    this.createAdvancePayment = this.createAdvancePayment.bind(this);
+    this.updateAdvancePayment = this.updateAdvancePayment.bind(this);
+    this.deleteAdvancePayment = this.deleteAdvancePayment.bind(this);
   }
   // 1. Create flat (with flatCount limit check)
   async createFlat(req, res) {
@@ -1078,6 +1081,13 @@ class FlatController {
           const rentStatus = newPaid >= rentPayment.amount ? 'paid' :
             newPaid > 0 ? 'partial' : 'pending';
 
+          // Track total advance used on this rent_payment
+          const existingAdvanceUsed =
+            rentPayment.advance_used != null
+              ? parseFloat(rentPayment.advance_used)
+              : 0;
+          const newAdvanceUsed = existingAdvanceUsed + applyAmount;
+
           // Merge advance_payment_used into metadata (keep array of applications)
           let meta = {};
           try {
@@ -1102,6 +1112,7 @@ class FlatController {
 
           const rentUpdatePayload = {
             paid_amount: newPaid,
+            advance_used: newAdvanceUsed,
             status: rentStatus,
             updated_at: new Date(),
             metadata: JSON.stringify(meta),
@@ -1244,23 +1255,244 @@ class FlatController {
       }
     }
 
-  // 7. Remove renter from flat (fresh state: no dues from renter; advance cleared / refund_due recorded)
+    // Create advance payment (when house owner forgot at assignment)
+    async createAdvancePayment(req, res) {
+      try {
+        const { id: flat_id } = req.params;
+        const { amount, payment_method, payment_date, transaction_id, notes } = req.body;
+        const userId = req.user.id;
+
+        const flat = await db('flat')
+          .join('house', 'flat.house_id', 'house.id')
+          .where('flat.id', flat_id)
+          .select('flat.*', 'house.ownerId')
+          .first();
+
+        if (!flat) {
+          return res.status(404).json({ success: false, error: 'Flat not found||ফ্ল্যাট খুঁজে পাওয়া যায়নি' });
+        }
+
+        if (req.user.role.slug !== 'web_owner') {
+          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+          if (!hasAccess) {
+            return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+          }
+        }
+
+        const amt = parseFloat(amount);
+        if (!Number.isFinite(amt) || amt <= 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'amount must be a positive number||প্রদানকৃত পরিমাণ হতে হবে একটি ধনাত্মক সংখ্যা',
+          });
+        }
+
+        const method = (payment_method || 'cash').toLowerCase();
+        if (!FlatController.ADVANCE_PAYMENT_METHODS.includes(method)) {
+          return res.status(400).json({
+            success: false,
+            error: `Invalid payment_method. Allowed: ${FlatController.ADVANCE_PAYMENT_METHODS.join(', ')}`,
+          });
+        }
+
+        
+        if (!flat.renter_id) {
+          return res.status(400).json({
+            success: false,
+            error: 'Flat has no renter. Advance can only be added for occupied flats.||ফ্ল্যাট এর কোনো রেন্টার নেই।',
+          });
+        }
+
+        
+
+        const payDate = payment_date ? new Date(payment_date) : new Date();
+        const advance = {
+          uuid: uuidv4(),
+          renter_id: flat.renter_id,
+          flat_id,
+          house_id: flat.house_id,
+          amount: amt,
+          paid_amount: amt,
+          remaining_amount: amt,
+          status: 'paid',
+          payment_date: payDate,
+          payment_method: method,
+          transaction_id: transaction_id || null,
+          notes: notes || null,
+          metadata: JSON.stringify({ type: 'advance', description: 'Advance payment (added later)' }),
+          created_at: new Date(),
+          updated_at: new Date(),
+        };
+
+        const [advanceId] = await db('advance_payment').insert(advance);
+
+        return res.status(201).json({
+          success: true,
+          data: { id: advanceId, ...advance },
+          message: 'Advance payment created',
+        });
+      } catch (error) {
+        console.error('Create advance payment error:', error);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to create advance payment',
+        });
+      }
+    }
+
+    // Update advance payment - only paid_amount; safe mutation of amount/remaining_amount
+    async updateAdvancePayment(req, res) {
+      try {
+        const { flatId, advanceId } = req.params;
+        const { paid_amount } = req.body;
+        const userId = req.user.id;
+
+        const newPaidAmount = parseFloat(paid_amount);
+        if (!Number.isFinite(newPaidAmount) || newPaidAmount <= 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'Paid Amount must be a positive number||প্রদানকৃত পরিমাণ হতে হবে একটি ধনাত্মক সংখ্যা',
+          });
+        }
+
+        const advance = await db('advance_payment')
+          .join('flat', 'advance_payment.flat_id', 'flat.id')
+          .join('house', 'flat.house_id', 'house.id')
+          .where('advance_payment.id', advanceId)
+          .andWhere('advance_payment.flat_id', flatId)
+          .select('advance_payment.*', 'house.ownerId')
+          .first();
+
+        if (!advance) {
+          return res.status(404).json({ success: false, error: 'Advance payment not found||এডভান্স পেমেন্ট খুঁজে পাওয়া যায়নি' });
+        }
+
+        if (req.user.role.slug !== 'web_owner') {
+          const hasAccess = await this.checkFlatAccess(userId, advance.house_id);
+          if (!hasAccess) {
+            return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+          }
+        }
+
+        const currentPaid = parseFloat(advance.paid_amount || 0);
+        const currentRemaining = parseFloat(advance.remaining_amount || 0);
+
+        let newRemaining;
+        if (newPaidAmount > currentPaid) {
+          const delta = newPaidAmount - currentPaid;
+          newRemaining = currentRemaining + delta;
+        } else if (newPaidAmount < currentPaid) {
+          const decreased = currentPaid - newPaidAmount;
+          if (currentRemaining - decreased < 0) {
+            return res.status(400).json({
+              success: false,
+              error: 'Cannot decrease paid amount: would make remaining amount negative. Advance has already been used..||এডভান্স পেমেন্ট এর পরিমান কমানো যাবে না: রিমেইনিং এমাউন্ট নেগেটিভ হবে। এডভান্স ইতিমধ্যে ব্যবহার করা হয়েছে।',
+            });
+          }
+          newRemaining = currentRemaining - decreased;
+        } else {
+          return res.json({
+            success: true,
+            data: advance,
+            message: 'No change||কোনো পরিবর্তন হয়নি',
+          });
+        }
+
+        await db('advance_payment')
+          .where('id', advanceId)
+          .update({
+            amount: newPaidAmount,
+            paid_amount: newPaidAmount,
+            remaining_amount: newRemaining,
+            updated_at: new Date(),
+          });
+
+        const updatedAdvance = await db('advance_payment').where('id', advanceId).first();
+        return res.json({
+          success: true,
+          data: updatedAdvance,
+          message: 'Advance payment updated',
+        });
+      } catch (error) {
+        console.error('Update advance payment error:', error);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to update advance payment||এডভান্স পেমেন্ট আপডেট করতে ব্যর্থ হয়েছে' + error.message,
+        });
+      }
+    }
+
+    // Delete advance payment - only when remaining_amount === paid_amount (never used)
+    async deleteAdvancePayment(req, res) {
+      try {
+        const { flatId, advanceId } = req.params;
+        const userId = req.user.id;
+        
+        const advance = await db('advance_payment')
+          .join('flat', 'advance_payment.flat_id', 'flat.id')
+          .where('advance_payment.id', advanceId)
+          .andWhere('advance_payment.flat_id', flatId)
+          .select('advance_payment.*')
+          .first();
+
+        if (!advance) {
+          return res.status(404).json({ success: false, error: 'Advance payment not found||এডভান্স পেমেন্ট খুঁজে পাওয়া যায়নি' });
+        }
+
+        if (req.user.role.slug !== 'web_owner') {
+          const hasAccess = await this.checkFlatAccess(userId, advance.house_id);
+          if (!hasAccess) {
+            return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+          }
+        }
+
+        
+
+        const paid = parseFloat(advance.paid_amount || 0);
+        const remaining = parseFloat(advance.remaining_amount || 0);
+
+        if (remaining !== paid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Cannot delete: advance has been used. remaining amount must equal paid amount to delete.||ডিলিট করা যাবে না: এডভান্স ব্যবহার করা হয়েছে। রিমেইনিং এমাউন্ট এবং পেমেন্ট এমাউন্ট সমান হতে হবে।',
+          });
+        }
+
+        await db('advance_payment').where('id', advanceId).del();
+
+        return res.json({
+          success: true,
+          message: 'Advance payment deleted||এডভান্স পেমেন্ট ডিলিট করা হয়েছে',
+        });
+      } catch (error) {
+        console.error('Delete advance payment error:', error);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to delete advance payment||এডভান্স পেমেন্ট ডিলিট করতে ব্যর্থ হয়েছে' + error.message,
+        });
+      }
+    }
+
+  // 7. Remove renter from flat (fresh state: no dues from renter; advance cleared / refund recorded)
+  // Body: { refund_amount? } - optional; if omitted, uses actual_remaining. House owner can record custom amount.
   async removeRenter(req, res) {
     try {
       const { id } = req.params;
+      const { refund_amount: refundAmountFromBody } = req.body || {};
       const userId = req.user.id;
 
-      // Get flat with house info
+      // Get flat with house and owner info
       const flat = await db("flat")
         .join("house", "flat.house_id", "house.id")
+        .leftJoin("user as house_owner", "house.ownerId", "house_owner.id")
         .where("flat.id", id)
-        .select("flat.*", "house.ownerId", "house.name as house_name")
+        .select("flat.*", "house.ownerId", "house.name as house_name", "house_owner.name as house_owner_name")
         .first();
 
       if (!flat) {
         return res.status(404).json({
           success: false,
-          error: "Flat not found",
+          error: "Flat not found||ফ্ল্যাট খুঁজে পাওয়া যায়নি",
         });
       }
 
@@ -1270,7 +1502,7 @@ class FlatController {
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
-            error: "You do not have permission to remove renter",
+            error: "You do not have permission to remove renter||রেন্টার সরানো যাবে না: আপনি অনুমতি প্রদান করা হয়নি",
           });
         }
       }
@@ -1279,11 +1511,11 @@ class FlatController {
       if (!flat.renter_id) {
         return res.status(400).json({
           success: false,
-          error: "Flat does not have an active renter",
+          error: "Flat does not have an active renter||ফ্ল্যাট এর কোনো সক্রিয় রেন্টার নেই",
         });
       }
 
-      // (ii) Block if renter has any unpaid/partially paid rent (must be fresh for new renter)
+      // Block if renter has any unpaid/partially paid rent
       const duesFromRenter = await db("rent_payment")
         .where("flat_id", id)
         .andWhere("status", "in", ["pending", "overdue", "partial"])
@@ -1292,44 +1524,66 @@ class FlatController {
       if (duesFromRenter.length > 0) {
         return res.status(400).json({
           success: false,
-          error: "Cannot remove renter while they have unpaid or partially paid rent. Clear dues first.",
+          error: "Cannot remove renter while they have unpaid or partially paid rent. Clear dues first.||রেন্টার সরানো যাবে না: রেন্টার এর কোনো অসমাপ্ত বকেয়া থাকলে সরানো যাবে না। বকেয়া সমাপ্ত করুন।",
           pendingPayments: duesFromRenter,
         });
       }
 
-      // (iii) Remaining advance: we allow removal; make advance "fresh" (refunded) and attach refund_due to renter
+      // Fetch advances with remaining (need id, remaining_amount, amount, metadata)
       const advanceWithRemaining = await db("advance_payment")
         .where("flat_id", id)
         .andWhere("renter_id", flat.renter_id)
         .andWhere("remaining_amount", ">", 0)
-        .select("id", "remaining_amount", "amount");
+        .select("id", "remaining_amount", "amount", "metadata");
 
-      let totalRefundDue = 0;
-      if (advanceWithRemaining.length > 0) {
-        totalRefundDue = advanceWithRemaining.reduce(
-          (sum, row) => sum + parseFloat(row.remaining_amount || 0),
-          0
-        );
-      }
+      const actualRemaining = advanceWithRemaining.reduce(
+        (sum, row) => sum + parseFloat(row.remaining_amount || 0),
+        0
+      );
+      const refundAmount = Number.isFinite(parseFloat(refundAmountFromBody))
+        ? Math.max(0, parseFloat(refundAmountFromBody))
+        : actualRemaining;
 
       const trx = await db.transaction();
 
       try {
-        // Clear advance for this flat+renter (make table fresh): set remaining = 0, status = refunded
-        if (advanceWithRemaining.length > 0) {
+        const now = new Date();
+        const property = {
+          flat_id: id,
+          house_id: flat.house_id,
+          house_name: flat.house_name,
+          house_owner_name: flat.house_owner_name || null,
+        };
+
+        // Clear each advance and update its metadata with refund_status
+        for (let i = 0; i < advanceWithRemaining.length; i++) {
+          const adv = advanceWithRemaining[i];
+          const advRemaining = parseFloat(adv.remaining_amount || 0);
+          let advMeta = {};
+          try {
+            advMeta = adv.metadata && typeof adv.metadata === "string"
+              ? JSON.parse(adv.metadata)
+              : adv.metadata || {};
+          } catch (e) {
+            advMeta = {};
+          }
+          const refundStatusEntry = { amount: refundAmount, actual_remaining: advRemaining };
+          const existingRefundStatus = Array.isArray(advMeta.refund_status) ? advMeta.refund_status : [];
+          existingRefundStatus.push(refundStatusEntry);
+          advMeta.refund_status = existingRefundStatus;
+
           await trx("advance_payment")
-            .where("flat_id", id)
-            .andWhere("renter_id", flat.renter_id)
-            .andWhere("remaining_amount", ">", 0)
+            .where("id", adv.id)
             .update({
               remaining_amount: 0,
               status: "refunded",
-              updated_at: new Date(),
+              metadata: JSON.stringify(advMeta),
+              updated_at: now,
             });
         }
 
-        // Attach refund_due to renter metadata so house owner knows to refund later
-        if (totalRefundDue > 0) {
+        // Update renter.metadata.refund_status (optimized: no spread)
+        if (advanceWithRemaining.length > 0) {
           const renter = await trx("renter").where("id", flat.renter_id).first();
           if (renter) {
             let renterMeta = {};
@@ -1340,26 +1594,43 @@ class FlatController {
             } catch (e) {
               renterMeta = {};
             }
-            const refundDueList = Array.isArray(renterMeta.refund_due) ? renterMeta.refund_due : [];
-            refundDueList.push({
-              amount: totalRefundDue,
-              flat_id: id,
-              house_id: flat.house_id,
-              flat_name: flat.name || flat.number,
-              house_name: flat.house_name,
-              removed_at: new Date().toISOString(),
-              settled_at: null,
-              settled_by: null,
-              notes: null,
+            const refundStatusList = Array.isArray(renterMeta.refund_status) ? renterMeta.refund_status : [];
+            refundStatusList.push({
+              property,
+              date: now.getTime(),
+              amount: refundAmount,
+              actual_remaining: actualRemaining,
             });
-            renterMeta.refund_due = refundDueList;
+            renterMeta.refund_status = refundStatusList;
+
             await trx("renter")
               .where("id", flat.renter_id)
               .update({
                 metadata: JSON.stringify(renterMeta),
-                updatedAt: new Date(),
+                updatedAt: now,
               });
           }
+
+          // House expense record for refund (amount = refund_amount, metadata with renter_id, flat_id, reason)
+          const expenseMeta = JSON.stringify({
+            renter_id: flat.renter_id,
+            flat_id: id,
+            reason: "removed_from_flat",
+          });
+          await trx("house_expense").insert({
+            uuid: uuidv4(),
+            house_id: flat.house_id,
+            category: "other",
+            amount: refundAmount,
+            description: "Advance refund to renter (removed from flat)",
+            expense_date: now,
+            status: "approved",
+            approved_by: userId,
+            paid_by: userId,
+            metadata: expenseMeta,
+            created_at: now,
+            updated_at: now,
+          });
         }
 
         // Update flat (fresh for new renter)
@@ -1367,27 +1638,29 @@ class FlatController {
           renter_id: null,
           last_rent_paid_date: null,
           rent_due_date: null,
-          updatedAt: new Date(),
+          updatedAt: now,
         });
 
         // Mark all future rent payments as cancelled
         await trx("rent_payment")
           .where("flat_id", id)
-          .andWhere("due_date", ">", new Date())
+          .andWhere("due_date", ">", now)
           .andWhere("status", "pending")
           .update({
             status: "cancelled",
-            updated_at: new Date(),
+            updated_at: now,
           });
 
         await trx.commit();
 
         return res.json({
           success: true,
-          message: totalRefundDue > 0
-            ? "Renter removed. Advance cleared. Refund due recorded for this renter."
+          message: advanceWithRemaining.length > 0
+            ? "Renter removed. Advance cleared. Refund recorded."
             : "Renter removed successfully",
-          refund_due: totalRefundDue > 0 ? { amount: totalRefundDue, renter_id: flat.renter_id } : null,
+          refund: advanceWithRemaining.length > 0
+            ? { amount: refundAmount, actual_remaining: actualRemaining, renter_id: flat.renter_id }
+            : null,
         });
       } catch (error) {
         await trx.rollback();

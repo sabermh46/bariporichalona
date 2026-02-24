@@ -76,6 +76,7 @@ model rent_payment {
   notes            String?              @db.Text
   base_amount      Decimal?             @db.Decimal(10, 2)
   amenities_charge Decimal?             @db.Decimal(10, 2)
+  advance_used     Decimal?             @db.Decimal(10, 2)
   metadata         String?              @db.LongText
   created_by       BigInt?
   created_at       DateTime?            @default(now()) @db.Timestamp(0)

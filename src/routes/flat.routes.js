@@ -49,6 +49,21 @@ router.post('/flats/:id/renter',
 
 router.post('/flats/:id/apply-advance', authMiddleware, FlatController.applyAdvancePayment);
 router.get('/flats/:id/advance-payments', authMiddleware, FlatController.getFlatAdvancePayments);
+router.post('/flats/:id/advance-payments',
+    authMiddleware,
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+    FlatController.createAdvancePayment
+);
+router.put('/flats/:flatId/advance-payments/:advanceId',
+    authMiddleware,
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+    FlatController.updateAdvancePayment
+);
+router.delete('/flats/:flatId/advance-payments/:advanceId',
+    authMiddleware,
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+    FlatController.deleteAdvancePayment
+);
 
 router.delete('/flats/:id/renter',
     authMiddleware,
