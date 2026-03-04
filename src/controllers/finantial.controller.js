@@ -7,6 +7,7 @@ const HouseController = require('./house.controller');
 const permissionService = require('../services/permission.service');
 const accessCache = require('../utils/accessCache');
 const { serializeBigInt } = require('../utils/serializer');
+const AppFeePaymentController = require('./appFeePayment.controller');
 class FinancialController {
   constructor() {
     // bind all to fix the this.function() reading indefined
@@ -1307,20 +1308,27 @@ class FinancialController {
     }
   }
 
-  // 4. Record app fee payment (A house owner pays app fee to web owner [this platform])
+  // 4. Record app fee payment (web owner creates accepted record for house owner; one record per owner, house_count)
   async recordAppFeePayment(req, res) {
     try {
       const {
         house_owner_id,
-        house_id,
+        house_count: houseCountBody,
         amount,
-        fee_type,
-        due_date,
-        payment_method,
+        fee_type = "monthly_subscription",
+        start_date: startDateBody,
+        payment_method: paymentMethodBody,
+        paymentMethod: paymentMethodBodyCamel,
         transaction_id,
+        subscription_days,
+        offset_days,
+        sendMail,
+        sendSms,
       } = req.body;
+      const paymentMethodRaw = paymentMethodBody ?? paymentMethodBodyCamel;
+      const normalizedPaymentMethod = AppFeePaymentController.normalizePaymentMethod(paymentMethodRaw) || "other";
       const userId = req.user.id;
-      
+
       if (
         req.user.role.slug === "caretaker" ||
         req.user.role.slug === "house_owner"
@@ -1328,15 +1336,6 @@ class FinancialController {
         return res.status(403).json({
           success: false,
           error: "Only web owner can record app fee payments",
-        });
-      }
-
-      // Get house and owner
-      const house = await db("house").where("id", house_id).first();
-      if (!house) {
-        return res.status(404).json({
-          success: false,
-          error: "House not found",
         });
       }
 
@@ -1348,36 +1347,66 @@ class FinancialController {
         });
       }
 
+      const activeCount = await db("house")
+        .where("ownerId", house_owner_id)
+        .andWhere("active", true)
+        .count("id as count")
+        .first()
+        .then((r) => parseInt(r.count, 10) || 0);
+
+      const houseCount = Number.isFinite(Number(houseCountBody)) && Number(houseCountBody) > 0
+        ? Math.max(1, parseInt(houseCountBody, 10))
+        : Math.max(1, activeCount);
+
       const feePayment = {
         uuid: uuidv4(),
         house_owner_id,
-        house_id,
+        house_count: houseCount,
         amount,
         fee_type,
-        due_date: due_date ? new Date(due_date) : new Date(),
+        start_date: startDateBody ? new Date(startDateBody) : new Date(),
         paid_date: new Date(),
-        payment_method,
-        transaction_id,
+        subscription_days: Number(subscription_days) || 30,
+        offset_days: Number(offset_days) >= 0 ? Number(offset_days) : 5,
+        payment_method: normalizedPaymentMethod,
+        transaction_id: transaction_id || null,
         status: "paid",
+        verified_by: userId,
+        verified_at: new Date(),
         created_at: new Date(),
         updated_at: new Date(),
       };
 
       const [paymentId] = await db("app_fee_payment").insert(feePayment);
 
-      // Send notification to house owner
       try {
-        await NotificationService.sendAppFeeReceipt({
-          houseOwnerEmail: houseOwner.email,
-          houseOwnerName: houseOwner.name,
-          houseName: house.name,
-          amount,
-          feeType: fee_type,
-          paymentDate: new Date(),
-          transactionId: transaction_id,
+        await AppFeePaymentController.createExpenseRecordsForAppFeePayment(db, {
+          house_owner_id,
+          amount: feePayment.amount,
+          app_fee_payment_id: paymentId,
+          paid_date: feePayment.paid_date,
+          verified_by: userId,
         });
-      } catch (notificationError) {
-        console.error("Failed to send notification:", notificationError);
+      } catch (expenseErr) {
+        console.error("Create app fee expense records error:", expenseErr);
+      }
+
+      if (sendMail !== false) {
+        try {
+          await NotificationService.sendAppFeeReceipt({
+            houseOwnerEmail: houseOwner.email,
+            houseOwnerName: houseOwner.name,
+            houseName: null,
+            amount,
+            feeType: fee_type,
+            paymentDate: new Date(),
+            transactionId: transaction_id,
+            table_name: 'app_fee',
+            row_id: paymentId,
+          });
+        } catch (notificationError) {
+          console.error("Failed to send notification:", notificationError);
+        }
       }
 
       return res.status(201).json({

@@ -470,17 +470,14 @@ class RenterController {
                     .leftJoin('flat as f', 'h.id', 'f.house_id')
                     .groupBy('h.id');
                 
-                // Get app fee payments
+                // Get app fee payments (per owner; house_count = number of houses covered)
                 const appFeePayments = await db('app_fee_payment as afp')
-                    .join('house as h', 'afp.house_id', 'h.id')
                     .where('afp.house_owner_id', owner.id)
-                    .select(
-                        'afp.*',
-                        'h.name as houseName',
-                        'h.uuid as houseUuid'
-                    )
-                    .orderBy('afp.due_date', 'desc')
-                    .limit(10); // Limit to recent payments
+                    .whereNull('afp.deleted_at')
+                    .select('afp.*')
+                    .orderBy('afp.paid_date', 'desc')
+                    .orderBy('afp.start_date', 'desc')
+                    .limit(10);
                 
                 // Get flat details for each house
                 const housesWithFlats = await Promise.all(

@@ -124,7 +124,7 @@ class NotificationService {
     }
 
     async sendAppFeeReceipt(data) {
-        const { houseOwnerEmail, houseOwnerName, amount, feeType, paymentDate, houseName } = data;
+        const { houseOwnerEmail, houseOwnerName, amount, feeType, paymentDate, houseName, table_name, row_id } = data;
 
         const template = this.getTemplate('app_fee_receipt', {
             owner_name: houseOwnerName,
@@ -135,13 +135,40 @@ class NotificationService {
         });
 
         if (houseOwnerEmail) {
-            await EmailService.sendEmail(houseOwnerEmail, template.email.subject, template.email.html, template.email.body, {
+            const metadata = {
                 type: 'app_fee_receipt',
                 houseOwnerName,
                 amount,
                 feeType,
                 houseName
-            }).catch(err => console.error('Email send error:', err));
+            };
+            if (table_name) metadata.table_name = table_name;
+            if (row_id != null) metadata.row_id = row_id;
+            await EmailService.sendEmail(houseOwnerEmail, template.email.subject, template.email.html, template.email.body, metadata)
+                .catch(err => console.error('Email send error:', err));
+        }
+    }
+
+    /**
+     * Notify web owner that a house owner/caretaker has submitted an app fee payment request (pending).
+     * Uses table_name='app_fee', row_id=paymentId for emaillog.
+     */
+    async sendAppFeeRequestToWebOwner(data) {
+        const { webOwnerEmail, houseOwnerName, houseOwnerEmail, amount, paymentId, transactionId, notes, requestedAt } = data;
+        const template = this.getTemplate('app_fee_request', {
+            house_owner_name: houseOwnerName,
+            house_owner_email: houseOwnerEmail || '',
+            amount,
+            transaction_id: transactionId || 'N/A',
+            notes: notes || '',
+            requested_at: requestedAt ? (typeof requestedAt === 'object' && requestedAt.toLocaleDateString ? requestedAt.toLocaleDateString() : String(requestedAt)) : ''
+        });
+        if (webOwnerEmail) {
+            const metadata = { type: 'app_fee_request', houseOwnerName, amount, paymentId };
+            metadata.table_name = 'app_fee';
+            metadata.row_id = paymentId;
+            await EmailService.sendEmail(webOwnerEmail, template.email.subject, template.email.html, template.email.body, metadata)
+                .catch(err => console.error('App fee request email error:', err));
         }
     }
 
@@ -223,6 +250,27 @@ class NotificationService {
                 </div>`
             },
             sms: `Payment Receipt: ${data.amount} received for ${data.fee_type || 'subscription'}. Thank you!`
+        };
+
+        templates.app_fee_request = {
+            email: {
+                subject: `App Fee Payment Request: ${data.amount} from ${data.house_owner_name || 'House Owner'}`,
+                body: `A new app fee payment request has been submitted.\n\nHouse Owner: ${data.house_owner_name}\nEmail: ${data.house_owner_email}\nAmount: ${data.amount}\nTransaction ID: ${data.transaction_id}\nRequested: ${data.requested_at}\nNotes: ${data.notes}\n\nPlease log in to verify and accept or reject.\n\nBest regards,\n${appName}`,
+                html: `<div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;">
+                    <div style="background: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
+                        <h2 style="margin: 0; font-size: 20px;">App Fee Payment Request</h2>
+                    </div>
+                    <div style="padding: 24px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                        <p>A new app fee payment request has been submitted and is awaiting your verification.</p>
+                        <p><strong>House Owner:</strong> ${data.house_owner_name || 'N/A'}<br><strong>Email:</strong> ${data.house_owner_email || 'N/A'}<br><strong>Amount:</strong> ${data.amount}<br><strong>Transaction ID:</strong> ${data.transaction_id || 'N/A'}<br><strong>Requested:</strong> ${data.requested_at || 'N/A'}</p>
+                        ${(data.notes && data.notes.trim()) ? `<p><strong>Notes:</strong> ${data.notes}</p>` : ''}
+                        <p>Please log in to the dashboard to verify and accept or reject this payment.</p>
+                        <p>Best regards,<br><strong>${appName}</strong></p>
+                        ${this._footer()}
+                    </div>
+                </div>`
+            },
+            sms: `App fee request: ${data.amount} from ${data.house_owner_name}. Please verify.`
         };
 
         return templates[type] || templates.rent_reminder;

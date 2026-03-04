@@ -3,6 +3,8 @@ const router = express.Router();
 const AppFeePaymentController = require('../controllers/appFeePayment.controller');
 const authMiddleware = require('../middleware/auth.middleware');
 const roleMiddleware = require('../middleware/role.middleware');
+const { hasPermission } = require('../services/permission.service');
+const db = require('../config/knex');
 
 // Apply authentication to all routes
 router.use(authMiddleware);
@@ -17,6 +19,31 @@ router.get('/payments',
 router.get('/payments/stats',
     roleMiddleware(['web_owner', 'staff', 'house_owner', 'caretaker']),
     AppFeePaymentController.getPaymentStats
+);
+
+// App fee status (expiresAt, blockAfter, inGracePeriod, isBlocked) for middleware & UI
+router.get('/payments/status/:house_owner_id',
+    roleMiddleware(['web_owner', 'staff', 'house_owner', 'caretaker']),
+    async (req, res, next) => {
+        try {
+            const { house_owner_id } = req.params;
+            const userRole = req.user.role?.slug;
+            const userId = req.user.id;
+            if (userRole === 'house_owner' && parseInt(house_owner_id) !== userId) {
+                return res.status(403).json({ success: false, error: 'You can only view your own status' });
+            }
+            if (userRole === 'caretaker') {
+                const accessibleOwners = await AppFeePaymentController.getAccessibleHouseOwners(userId);
+                if (!accessibleOwners.includes(parseInt(house_owner_id))) {
+                    return res.status(403).json({ success: false, error: 'Access denied' });
+                }
+            }
+            const status = await AppFeePaymentController.getAppFeeStatus(parseInt(house_owner_id));
+            res.json({ success: true, data: status });
+        } catch (e) {
+            next(e);
+        }
+    }
 );
 
 // Get due amount calculation for house owner
@@ -83,7 +110,7 @@ router.post('/payments',
 
 // Update payment (verify/reject)
 router.put('/payments/:id',
-    roleMiddleware(['web_owner', 'staff']),
+    roleMiddleware(['web_owner', 'staff', 'house_owner', 'caretaker']),
     AppFeePaymentController.updatePayment
 );
 
@@ -110,6 +137,24 @@ router.post('/payments/generate-monthly',
     }
 );
 
+// App fee email log (paginated) - table_name = app_fee
+router.get('/email-log',
+    roleMiddleware(['web_owner', 'staff']),
+    AppFeePaymentController.getEmailLog
+);
+
+// App fee email log for a specific payment (row_id = app_fee_payment id)
+router.get('/email-log/:row_id',
+    roleMiddleware(['web_owner', 'staff', 'house_owner', 'caretaker']),
+    AppFeePaymentController.getEmailLogByRowId
+);
+
+// Resend app fee email (receipt if paid, request notification if pending)
+router.post('/resend-mail/:id',
+    roleMiddleware(['web_owner', 'staff']),
+    AppFeePaymentController.resendAppFeeMail
+);
+
 // Get payment by ID
 router.get('/payments/:id',
     roleMiddleware(['web_owner', 'staff', 'house_owner', 'caretaker']),
@@ -123,7 +168,7 @@ router.get('/payments/:id',
                 .join('user as ho', 'afp.house_owner_id', 'ho.id')
                 .leftJoin('user as v', 'afp.verified_by', 'v.id')
                 .where('afp.id', id)
-                .andWhereNull('afp.deleted_at')
+                .whereNull('afp.deleted_at')
                 .select(
                     'afp.*',
                     'ho.name as house_owner_name',

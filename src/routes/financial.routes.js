@@ -119,12 +119,12 @@ router.get('/payments/app-fee',
     roleMiddleware(['web_owner', 'staff', 'caretaker']), // Only web owner
     async (req, res) => {
         const { status, houseOwnerId } = req.query;
-        let query = db('app_fee_payment').select('*');
+        let query = db('app_fee_payment').whereNull('deleted_at').select('*');
 
         if (status) query.where('status', status);
         if (houseOwnerId) query.where('house_owner_id', houseOwnerId);
 
-        query.orderBy('due_date', 'desc');
+        query.orderBy('start_date', 'desc');
         const payments = await query;
         res.json({ success: true, data: payments });
     }

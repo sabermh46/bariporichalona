@@ -120,34 +120,35 @@ model house_expense {
 }
 
 model app_fee_payment {
-  id             BigInt               @id @default(autoincrement())
-  uuid           String?              @unique @db.VarChar(36)
-  house_owner_id BigInt
-  house_id       BigInt
-  amount         Decimal              @db.Decimal(10, 2)
-  fee_type       fee_type_enum
-  due_date       DateTime             @db.Date
-  paid_date      DateTime?            @db.Date
-  payment_method payment_method_enum?
-  transaction_id String?              @db.VarChar(100)
-  status         fee_status_enum?     @default(pending)
-  invoice_url    String?              @db.VarChar(500)
-  metadata       String?              @db.LongText
-  created_at     DateTime?            @default(now()) @db.Timestamp(0)
-  updated_at     DateTime?            @default(now()) @db.Timestamp(0)
-  deleted_at     DateTime?            @db.Timestamp(0) // Add for soft delete
-  notes          String?              @db.Text // Add for admin notes
-  verified_by    BigInt? // Who verified the payment
-  verified_at    DateTime?            @db.Timestamp(0) // When it was verified
-  house          house                @relation(fields: [house_id], references: [id])
-  houseOwner     user                 @relation("AppFeePayment_houseOwner", fields: [house_owner_id], references: [id])
-  verifier       user?                @relation("AppFeePayment_verifier", fields: [verified_by], references: [id])
+  id                BigInt               @id @default(autoincrement())
+  uuid              String?              @unique @db.VarChar(36)
+  house_owner_id    BigInt
+  house_count       Int                  @default(1) // Number of houses this payment covers (tiered: 1=500, 2=1000, etc.)
+  amount            Decimal              @db.Decimal(10, 2)
+  fee_type          fee_type_enum
+  start_date        DateTime             @db.Date
+  paid_date         DateTime?            @db.Date
+  subscription_days Int                  @default(30) // Days from paid_date until expiry
+  offset_days       Int                  @default(5) // Grace days after expiry (allow with warning until block_after)
+  payment_method    payment_method_enum?
+  transaction_id    String?              @db.VarChar(100)
+  status            fee_status_enum?     @default(pending)
+  invoice_url       String?              @db.VarChar(500)
+  metadata          String?              @db.LongText
+  created_at        DateTime?            @default(now()) @db.Timestamp(0)
+  updated_at        DateTime?            @default(now()) @db.Timestamp(0)
+  deleted_at        DateTime?            @db.Timestamp(0)
+  notes             String?              @db.Text
+  verified_by       BigInt?
+  verified_at       DateTime?            @db.Timestamp(0)
+  houseOwner        user                 @relation("AppFeePayment_houseOwner", fields: [house_owner_id], references: [id])
+  verifier          user?                @relation("AppFeePayment_verifier", fields: [verified_by], references: [id])
 
-  @@index([house_id], map: "app_fee_payment_house_id_fkey")
   @@index([house_owner_id], map: "app_fee_payment_house_owner_id_fkey")
   @@index([verified_by], map: "app_fee_payment_verified_by_fkey")
   @@index([deleted_at], map: "app_fee_payment_deleted_at_idx")
   @@index([created_at], map: "app_fee_payment_created_at_idx")
+  @@index([paid_date], map: "app_fee_payment_paid_date_idx")
 }
 
 model financial_report {
@@ -233,7 +234,6 @@ model house {
   flatCount           BigInt                @default(0)
   active              Boolean               @default(false)
   name                String                @default("Unnamed House") @db.VarChar(255)
-  app_fee_payments    app_fee_payment[]
   caretakerassignment caretakerassignment[]
   financial_reports   financial_report[]
   flat                flat[]
@@ -645,6 +645,7 @@ enum fee_status_enum {
   pending
   paid
   overdue
+  cancelled
 }
 
 enum advance_payment_status {
