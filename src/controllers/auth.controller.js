@@ -2,6 +2,7 @@ const AuthService = require("../services/auth.service");
 const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
 const db = require("../config/knex");
+const notificationController = require("./notification.controller");
 
 class AuthController {
   // Public registration
@@ -16,6 +17,17 @@ class AuthController {
       }
 
       const result = await AuthService.register(data);
+      if (result.user && result.user.role && result.user.role.slug === "house_owner") {
+        try {
+          await notificationController.createSystemCommonNotification({
+            title: "New house owner registered",
+            message: `${result.user.name || result.user.email} signed up as a house owner.`,
+            redirectLink: `/admin/house-owners/${result.user.id}`,
+          });
+        } catch (notifErr) {
+          console.error("System notification (house owner signup):", notifErr);
+        }
+      }
       res.json(serializeBigInt(result));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -233,6 +245,18 @@ class AuthController {
         houseLimit,
         permissions: permissions || []
       });
+
+      if (result.user && result.user.role && result.user.role.slug === "house_owner") {
+        try {
+          await notificationController.createSystemCommonNotification({
+            title: "New house owner created",
+            message: `${result.user.name || result.user.email} was added as a house owner.`,
+            redirectLink: `/admin/house-owners/${result.user.id}`,
+          });
+        } catch (notifErr) {
+          console.error("System notification (house owner create-user):", notifErr);
+        }
+      }
 
       res.json(serializeBigInt(result));
     } catch (err) {

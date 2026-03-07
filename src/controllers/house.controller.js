@@ -3,6 +3,7 @@ const db = require("../config/knex");
 const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
 const CaretakerPermissionService = require("../services/CaretakerPermission.service");
+const notificationController = require("./notification.controller");
 
 class HouseController {
 
@@ -225,6 +226,16 @@ class HouseController {
       delete responseHouse.owner_name;
       delete responseHouse.owner_email;
       delete responseHouse.owner_phone;
+
+      try {
+        await notificationController.createSystemCommonNotification({
+          title: "New house created",
+          message: `House "${house.name || address}" was created.`,
+          redirectLink: `/houses/${houseId}`,
+        });
+      } catch (notifErr) {
+        console.error("System notification (house created):", notifErr);
+      }
 
       res.status(201).json({
         success: true,

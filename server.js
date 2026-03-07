@@ -77,7 +77,6 @@ app.use('/admin/permissions', staffPermissionRoutes);
 app.use('/houses', houseRoutes);
 app.use('/admin/system-settings', systemPermissionRoutes);
 app.use('/analytics', analyticsRoutes);
-app.use('/houses', houseRoutes);
 app.use('/', financialRoutes);
 app.use('/', flatRoutes)
 app.use('/', renterRoutes);

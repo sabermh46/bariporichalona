@@ -269,7 +269,7 @@ model notice {
 model notification {
   id                  BigInt                @id @default(autoincrement())
   uuid                String                @unique(map: "Notification_uuid_key") @db.VarChar(36)
-  userId              BigInt
+  userId              BigInt?
   title               String
   message             String
   type                String                @default("info")
@@ -280,7 +280,7 @@ model notification {
   createdAt           DateTime              @default(now())
   readAt              DateTime?
   expiresAt           DateTime?
-  user                user                  @relation(fields: [userId], references: [id], onDelete: Cascade, map: "Notification_userId_fkey")
+  user                user?                 @relation(fields: [userId], references: [id], onDelete: Cascade, map: "Notification_userId_fkey")
   pushnotificationlog pushnotificationlog[]
 
   @@index([pushSent], map: "Notification_pushSent_idx")

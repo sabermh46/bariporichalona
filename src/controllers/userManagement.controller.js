@@ -2,6 +2,7 @@
 const AuthService = require('../services/auth.service');
 const db = require('../config/knex');
 const { hashPassword } = require('../utils/password');
+const notificationController = require('./notification.controller');
 
 class UserManagementController {
 
@@ -136,7 +137,15 @@ class UserManagementController {
                     metadata: finalMetadata
                 }
             );
-            
+            try {
+                await notificationController.createSystemCommonNotification({
+                    title: 'New house owner created',
+                    message: `${result.user.name || result.user.email} was added as a house owner.`,
+                    redirectLink: `/admin/house-owners/${result.user.id}`,
+                });
+            } catch (notifErr) {
+                console.error('System notification (house owner):', notifErr);
+            }
             res.status(201).json({
                 success: true,
                 data: result.user,
