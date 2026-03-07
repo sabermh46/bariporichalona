@@ -287,7 +287,7 @@ async generateRegistrationToken(creatorId, options = {}) {
                   });
 
               const updatedUser = await db('user')
-                  .where({ id: existingUser.id })
+                  .where('user.id', existingUser.id)
                   .leftJoin('role', 'user.roleId', 'role.id')
                   .select(
                       'user.*',
@@ -323,7 +323,7 @@ async generateRegistrationToken(creatorId, options = {}) {
           // Validate that creator has permission to create this role
           if (createdBy) {
               const creator = await db('user')
-                  .where('id', createdBy)
+                  .where('user.id', createdBy)
                   .leftJoin('role', 'user.roleId', 'role.id')
                   .select('user.*', 'role.slug as creator_role_slug')
                   .first();
@@ -551,7 +551,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
 
     // Get creator info
     const creator = await db('user')
-      .where({ id: creatorId })
+      .where('user.id', creatorId)
       .leftJoin('role', 'user.roleId', 'role.id')
       .select(
         'user.*',
@@ -712,7 +712,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
 
   async checkUserHierarchy(parentId, childId) {
     const child = await db('user')
-      .where({ id: childId })
+      .where('user.id', childId)
       .leftJoin('user as parent', 'user.parentId', 'parent.id')
       .select('user.*', 'parent.id as parent_id')
       .first();
@@ -766,9 +766,55 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
     });
   }
 
-  async getManagedUsers(userId, roleFilter = null) {
+  /**
+   * Fetch full "house_owner DNA" for one house owner: profile, houses, flats,
+   * app fee payments, income (rent + advance), expenses, loans.
+   */
+  async getHouseOwnerDna(houseOwnerId) {
+    const houseIds = await db('house')
+      .where('ownerId', houseOwnerId)
+      .pluck('id');
+
+    const [houses, flats, appFeePayments, rentPayments, advancePayments, expenses, loans] = await Promise.all([
+      db('house').where('ownerId', houseOwnerId).select('*'),
+      houseIds.length ? db('flat').whereIn('house_id', houseIds).select('*') : [],
+      db('app_fee_payment').where('house_owner_id', houseOwnerId).select('*').orderBy('created_at', 'desc'),
+      houseIds.length ? db('rent_payment').whereIn('house_id', houseIds).select('*').orderBy('paid_date', 'desc') : [],
+      houseIds.length ? db('advance_payment').whereIn('house_id', houseIds).select('*').orderBy('payment_date', 'desc') : [],
+      houseIds.length ? db('house_expense').whereIn('house_id', houseIds).select('*').orderBy('expense_date', 'desc') : [],
+      houseIds.length ? db('house_loan').whereIn('house_id', houseIds).select('*') : []
+    ]);
+
+    // Optionally load loan payments per loan
+    let loanPayments = [];
+    if (loans.length) {
+      const loanIds = loans.map(l => l.id);
+      loanPayments = await db('house_loan_payment')
+        .whereIn('loan_id', loanIds)
+        .select('*')
+        .orderBy('payment_date', 'desc');
+    }
+
+    return {
+      profile: null,
+      houses,
+      flats,
+      appFeePayments,
+      income: {
+        rentPayments,
+        advancePayments
+      },
+      expenses,
+      loans,
+      loanPayments
+    };
+  }
+
+  async getManagedUsers(userId, roleFilter = null, options = {}) {
+    const { expandDna = false, targetUserId = null } = options;
+
     const user = await db('user')
-      .where({ id: userId })
+      .where('user.id', userId)
       .leftJoin('role', 'user.roleId', 'role.id')
       .select('user.*', 'role.slug as role_slug')
       .first();
@@ -792,6 +838,9 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
     if (roleFilter) {
       query = query.where('role.slug', roleFilter);
     }
+    if (targetUserId != null && targetUserId !== '') {
+      query = query.where('user.id', targetUserId);
+    }
 
     const allUsers = await query;
 
@@ -800,7 +849,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
     for (const targetUser of allUsers) {
       const isManaged = await this.checkUserHierarchy(userId, targetUser.id);
       if (isManaged) {
-        managedUsers.push({
+        const payload = {
           ...targetUser,
           role: {
             name: targetUser.role_name,
@@ -811,7 +860,23 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
             name: targetUser.parent_name,
             email: targetUser.parent_email
           } : null
-        });
+        };
+
+        if (expandDna && targetUser.role_slug === 'house_owner') {
+          const dna = await this.getHouseOwnerDna(targetUser.id);
+          const profile = { ...targetUser };
+          if (profile.profileJson) {
+            try {
+              profile.profileJson = typeof profile.profileJson === 'string' ? JSON.parse(profile.profileJson) : profile.profileJson;
+            } catch (e) {
+              profile.profileJson = {};
+            }
+          }
+          dna.profile = profile;
+          payload.dna = dna;
+        }
+
+        managedUsers.push(payload);
       }
     }
 
@@ -821,7 +886,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
   async updateUserLimits(userId, updates) {
     return await db.transaction(async (trx) => {
       const user = await trx('user')
-        .where({ id: userId })
+        .where('user.id', userId)
         .leftJoin('role', 'user.roleId', 'role.id')
         .select('user.*', 'role.slug as role_slug')
         .first();
@@ -876,7 +941,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
         });
 
       const updatedUser = await trx('user')
-        .where({ id: userId })
+        .where('user.id', userId)
         .leftJoin('role', 'user.roleId', 'role.id')
         .select('user.*', 'role.name as role_name', 'role.slug as role_slug')
         .first();

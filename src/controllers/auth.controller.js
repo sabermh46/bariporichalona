@@ -266,13 +266,16 @@ class AuthController {
     }
   }
 
-  // Get managed users
+  // Get managed users (optional expand=dna for full house_owner DNA; optional userId to fetch one user)
   async getManagedUsers(req, res) {
     try {
-      const { role } = req.query;
-      
-      const users = await AuthService.getManagedUsers(req.user.id, role);
-      
+      const { role, expand, userId: targetUserId } = req.query;
+
+      const users = await AuthService.getManagedUsers(req.user.id, role, {
+        expandDna: expand === 'dna',
+        targetUserId: targetUserId || null
+      });
+
       res.json(serializeBigInt(users));
     } catch (err) {
       res.status(400).json({ error: err.message });

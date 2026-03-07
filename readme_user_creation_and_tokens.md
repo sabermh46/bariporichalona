@@ -290,9 +290,38 @@ Returns users that the current admin “manages” (e.g. created by them or unde
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `role` | string | Filter by role slug. |
+| `role` | string | Filter by role slug (e.g. `house_owner`). |
+| `expand` | string | If `dna`, each managed **house_owner** gets a `dna` object with full related data (see below). |
+| `userId` | string | If set, return only the managed user with this id (still respects hierarchy; returns empty array if not managed). |
 
-**Response 200:** Array of user objects with role and parent info.
+**Response 200 (no expand):** Array of user objects with `role` and `parent`:
+
+```json
+[
+  {
+    "id": 5,
+    "email": "owner@example.com",
+    "name": "Jane",
+    "role": { "name": "House Owner", "slug": "house_owner" },
+    "parent": { "id": 1, "name": "Admin", "email": "admin@example.com" }
+  }
+]
+```
+
+**Response 200 with `?expand=dna`:** Same array, but each user with `role.slug === "house_owner"` includes a `dna` object:
+
+| Field | Description |
+|-------|-------------|
+| `dna.profile` | Full user row (including parsed `profileJson` if present). |
+| `dna.houses` | All houses where `ownerId` = this user (`house` table). |
+| `dna.flats` | All flats in those houses (`flat` table). |
+| `dna.appFeePayments` | All app fee payments for this house owner (`app_fee_payment`), newest first. |
+| `dna.income` | `{ rentPayments, advancePayments }` – rent and advance payment rows for their houses. |
+| `dna.expenses` | All house expenses for their houses (`house_expense`), newest first. |
+| `dna.loans` | All loans for their houses (`house_loan`). |
+| `dna.loanPayments` | All loan payment rows for those loans (`house_loan_payment`), newest first. |
+
+Example: `GET /auth/managed-users?role=house_owner&expand=dna` returns only house owners, each with full DNA (profile, houses, flats, app fee, income, expense, loans).
 
 ---
 

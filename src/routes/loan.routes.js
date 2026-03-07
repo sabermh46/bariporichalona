@@ -6,25 +6,15 @@ const authMiddleware = require('../middleware/auth.middleware');
 // Apply auth middleware
 router.use(authMiddleware);
 
-// Create a new loan
-router.post('/', LoanController.createLoan);
+// —— Loan (house_loan) ——
+router.post('/loan-create', LoanController.createLoan);
+router.get('/loan-by-house/:houseId', LoanController.getLoansByHouse);
+router.get('/loan/:loanId', LoanController.getLoanDetails);
+router.put('/loan/:loanId', LoanController.updateLoan);
+router.delete('/loan/:loanId', LoanController.deleteLoan);
 
-// Get loans for a specific house
-router.get('/house/:houseId', LoanController.getLoansByHouse);
-
-// Get details of a specific loan (incl. payments)
-router.get('/:id', LoanController.getLoanDetails);
-
-// Update a loan
-router.put('/:id', LoanController.updateLoan);
-
-// Delete a loan
-router.delete('/:id', LoanController.deleteLoan);
-
-// Record a payment for a loan
-router.post('/:loanId/payments', LoanController.recordPayment);
-
-// Update a payment
-router.put('/payments/:paymentId', LoanController.updatePayment);
+// —— Loan payment (house_loan_payment) ——
+router.post('/loan-payment-create/:loanId', LoanController.recordPayment);
+router.put('/loan-payment/:loanPaymentId', LoanController.updatePayment);
 
 module.exports = router;

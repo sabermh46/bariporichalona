@@ -110,9 +110,28 @@ class LoanController {
                 .where('house_id', houseId)
                 .orderBy('created_at', 'desc');
 
+            // Attach payments for each loan
+            const loanIds = loans.map((l) => l.id);
+            const payments =
+                loanIds.length > 0
+                    ? await db('house_loan_payment')
+                          .whereIn('loan_id', loanIds)
+                          .orderBy('payment_date', 'desc')
+                    : [];
+            const paymentsByLoanId = payments.reduce((acc, p) => {
+                const lid = p.loan_id.toString();
+                if (!acc[lid]) acc[lid] = [];
+                acc[lid].push(p);
+                return acc;
+            }, {});
+            const loansWithPayments = loans.map((loan) => ({
+                ...loan,
+                payments: paymentsByLoanId[loan.id.toString()] || []
+            }));
+
             res.json({
                 success: true,
-                data: serializeBigInt(loans)
+                data: serializeBigInt(loansWithPayments)
             });
 
         } catch (error) {
@@ -126,9 +145,9 @@ class LoanController {
      */
     async getLoanDetails(req, res) {
         try {
-            const { id } = req.params;
+            const { loanId } = req.params;
 
-            const loan = await db('house_loan').where('id', id).first();
+            const loan = await db('house_loan').where('id', loanId).first();
             
             if (!loan) {
                 return res.status(404).json({ success: false, error: "Loan not found" });
@@ -142,7 +161,7 @@ class LoanController {
 
             // Fetch payments
             const payments = await db('house_loan_payment')
-                .where('loan_id', id)
+                .where('loan_id', loanId)
                 .orderBy('payment_date', 'desc');
 
             res.json({
@@ -164,7 +183,7 @@ class LoanController {
      */
     async updateLoan(req, res) {
         try {
-            const { id } = req.params;
+            const { loanId } = req.params;
             const { 
                 provider_name, 
                 amount, 
@@ -176,7 +195,7 @@ class LoanController {
                 metadata 
             } = req.body;
 
-            const loan = await db('house_loan').where('id', id).first();
+            const loan = await db('house_loan').where('id', loanId).first();
             if (!loan) return res.status(404).json({ success: false, error: "Loan not found" });
 
              const house = await db('house').where('id', loan.house_id).first();
@@ -196,9 +215,9 @@ class LoanController {
             
             updateData.updated_at = new Date();
 
-            await db('house_loan').where('id', id).update(updateData);
+            await db('house_loan').where('id', loanId).update(updateData);
             
-            const updatedLoan = await db('house_loan').where('id', id).first();
+            const updatedLoan = await db('house_loan').where('id', loanId).first();
 
             res.json({
                 success: true,
@@ -217,9 +236,9 @@ class LoanController {
      */
     async deleteLoan(req, res) {
         try {
-            const { id } = req.params;
+            const { loanId } = req.params;
             
-            const loan = await db('house_loan').where('id', id).first();
+            const loan = await db('house_loan').where('id', loanId).first();
             if (!loan) return res.status(404).json({ success: false, error: "Loan not found" });
 
             const house = await db('house').where('id', loan.house_id).first();
@@ -227,7 +246,8 @@ class LoanController {
                  return res.status(403).json({ success: false, error: "Unauthorized access" });
             }
 
-            await db('house_loan').where('id', id).del();
+            await db('house_loan').where('id', loanId).del();
+            await db('house_loan_payment').where('loan_id', loanId).del();
 
             res.json({
                 success: true,
@@ -319,10 +339,10 @@ class LoanController {
     async updatePayment(req, res) {
         const trx = await db.transaction();
         try {
-            const { paymentId } = req.params;
+            const { loanPaymentId } = req.params;
             const { amount, payment_date, transaction_id, notes } = req.body;
 
-            const payment = await trx('house_loan_payment').where('id', paymentId).first();
+            const payment = await trx('house_loan_payment').where('id', loanPaymentId).first();
             if (!payment) {
                 await trx.rollback();
                 return res.status(404).json({ success: false, error: "Payment not found" });
@@ -357,7 +377,7 @@ class LoanController {
 
             if (Object.keys(updateData).length > 0) {
                 updateData.updated_at = new Date();
-                await trx('house_loan_payment').where('id', paymentId).update(updateData);
+                await trx('house_loan_payment').where('id', loanPaymentId).update(updateData);
             }
 
             // If amount changed, update loan total paid
@@ -382,7 +402,7 @@ class LoanController {
 
             await trx.commit();
 
-            const updatedPayment = await db('house_loan_payment').where('id', paymentId).first();
+            const updatedPayment = await db('house_loan_payment').where('id', loanPaymentId).first();
 
             res.json({
                 success: true,
