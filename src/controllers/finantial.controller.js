@@ -321,7 +321,7 @@ class FinancialController {
             ? JSON.parse(flat.metadata)
             : flatMetadata || {};
       } catch (e) {
-        console.error("Failed to parse flat metadata:", e);
+        console.error("[recordRentPayment] Failed to parse flat metadata:", e);
         flatMetadata = {};
       }
 
@@ -512,7 +512,14 @@ class FinancialController {
       // cashFromRenter: when renter_paid_remaining is set = additive cash. Else paid_amount = TOTAL for this payment.
       // When use_advance and we used advance: paid_amount means total, so cash = total - advance (avoid double count).
       let cashFromRenter;
-      if (renter_paid_remaining != null && renter_paid_remaining !== "") {
+      // Treat renter_paid_remaining as an *extra* amount only when it is provided and non-zero.
+      // When it is 0 (like in your log), fall back to paid_amount / inferred total.
+      if (
+        renter_paid_remaining !== undefined &&
+        renter_paid_remaining !== null &&
+        renter_paid_remaining !== "" &&
+        parseFloat(renter_paid_remaining) !== 0
+      ) {
         cashFromRenter = parseFloat(renter_paid_remaining);
       } else if (use_advance_payment && advancePaymentUsed) {
         // paid_amount from body = total for this payment; cash = total - advance used
@@ -660,6 +667,14 @@ class FinancialController {
           });
         }
 
+        if (!paymentId) {
+          await trx.rollback();
+          return res.status(500).json({
+            success: false,
+            error: "Internal error: rent payment was not created or updated. Please contact support.",
+          });
+        }
+
         // Update flat's last rent paid date only if payment is not pending
         if (finalStatus !== "pending") {
           await trx("flat").where("id", flat_id).update({
@@ -740,6 +755,7 @@ class FinancialController {
 
         await trx.commit();
 
+
         // Send receipt notification only for non-pending payments
         if ((flat.renterEmail || flat.renterPhone) && finalStatus !== "pending") {
           try {
@@ -792,7 +808,10 @@ class FinancialController {
         throw error;
       }
     } catch (error) {
-      console.error("Record rent payment error:", error);
+      console.error("[recordRentPayment] error", {
+        message: error && error.message,
+        stack: error && error.stack,
+      });
       return res.status(500).json({
         success: false,
         error: "Failed to process rent payment",
