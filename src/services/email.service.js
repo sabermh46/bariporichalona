@@ -16,8 +16,8 @@ class EmailService {
     return `email-${Date.now()}-${++this._jobId}`;
   }
 
-  _createJob(to, subject, html, text, metadata) {
-    return {
+  _createJob(to, subject, html, text, metadata, attachments = null) {
+    const job = {
       id: this._nextId(),
       to,
       subject,
@@ -26,15 +26,23 @@ class EmailService {
       metadata: metadata || {},
       retryCount: 0,
     };
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      job.attachments = attachments.map((a) => ({
+        filename: a.filename || "attachment",
+        content: Buffer.isBuffer(a.content) ? a.content.toString("base64") : a.content,
+      }));
+    }
+    return job;
   }
 
   /**
    * Queue an email for delivery (non-blocking).
    * Returns immediately with { queued: true, id }.
+   * attachments: optional array of { filename, content: Buffer } (content serialized as base64 for worker).
    */
-  queueEmail(to, subject, html, text = null, metadata = {}) {
-    const safeMetadata = metadata && typeof metadata === 'object' ? { ...metadata } : {};
-    const job = this._createJob(to, subject, html, text, safeMetadata);
+  queueEmail(to, subject, html, text = null, metadata = {}, attachments = null) {
+    const safeMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {};
+    const job = this._createJob(to, subject, html, text, safeMetadata, attachments);
     this.queue.push(job);
     this.stats.queued++;
     this._processQueue();
@@ -44,18 +52,19 @@ class EmailService {
   /**
    * Send email (default: queued, fire-and-forget).
    * metadata may include: type, table_name, row_id (for emaillog tracking), and other fields.
+   * attachments: optional array of { filename, content: Buffer } to attach to the email.
    */
-  async sendEmail(to, subject, html, text = null, metadata = {}) {
-    if (!to || typeof to !== 'string') {
+  async sendEmail(to, subject, html, text = null, metadata = {}, attachments = null) {
+    if (!to || typeof to !== "string") {
       throw new Error('EmailService.sendEmail: "to" is required and must be a string');
     }
-    if (!subject || typeof subject !== 'string') {
+    if (!subject || typeof subject !== "string") {
       throw new Error('EmailService.sendEmail: "subject" is required and must be a string');
     }
-    if (!html && html !== '') {
+    if (!html && html !== "") {
       throw new Error('EmailService.sendEmail: "html" is required');
     }
-    return this.queueEmail(to, subject, html, text, metadata);
+    return this.queueEmail(to, subject, html, text, metadata, attachments);
   }
 
   async _processQueue() {
@@ -66,12 +75,13 @@ class EmailService {
 
     const pool = getEmailWorkerPool();
 
-    pool.execute('sendEmail', {
+    pool.execute("sendEmail", {
       to: job.to,
       subject: job.subject,
       html: job.html,
       text: job.text,
       metadata: job.metadata,
+      attachments: job.attachments || null,
     }).then((result) => {
       this.stats.sent++;
       console.log('Email sent to', job.to, result?.messageId || '');

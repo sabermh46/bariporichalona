@@ -64,8 +64,8 @@ const loanRoutes = require('./src/routes/loan.routes');
 
 // app.use('/api/images', imageRoutes);
 
-// Static files (public uploads if any)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Static files: uploads (including /uploads/pdfs/<id>/invoice.pdf for rent receipts)
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 
 app.use("/auth", googleRoute);

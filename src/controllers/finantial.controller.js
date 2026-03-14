@@ -1,4 +1,6 @@
 // Updated financial.controller.js with snake_case column names
+const path = require('path');
+const fs = require('fs').promises;
 const db = require('../config/knex');
 const { v4: uuidv4 } = require('uuid');
 const NotificationService = require('../services/emailSmsNotification.service');
@@ -8,6 +10,7 @@ const permissionService = require('../services/permission.service');
 const accessCache = require('../utils/accessCache');
 const { serializeBigInt } = require('../utils/serializer');
 const AppFeePaymentController = require('./appFeePayment.controller');
+const { generateRentInvoicePdf } = require('../generators/invoicePdf');
 class FinancialController {
   constructor() {
     // bind all to fix the this.function() reading indefined
@@ -284,6 +287,7 @@ class FinancialController {
         renter_paid_remaining, // Optional: additional cash from renter (e.g. when closing month after applying advance)
         for_month, // Optional: specific month to create due for (YYYY-MM format)
         for_year, // Optional: specific year
+        send_pdf_attachment = false, // If true, attach invoice PDF to receipt email and save after send
       } = req.body;
 
       const userId = req.user.id;
@@ -759,6 +763,29 @@ class FinancialController {
         // Send receipt notification only for non-pending payments
         if ((flat.renterEmail || flat.renterPhone) && finalStatus !== "pending") {
           try {
+            let pdfBuffer = null;
+            if (String(send_pdf_attachment) === "true" && flat.renterEmail) {
+              try {
+                const forMonthStr = dueDate
+                  ? this.getForMonth(dueDate)
+                  : (currentPayment && currentPayment.for_month) || null;
+                pdfBuffer = await generateRentInvoicePdf({
+                  renterName: flat.renterName,
+                  houseName: flat.houseName,
+                  flatNumber: flat.number,
+                  totalAmount,
+                  paymentDate: actualPaidDate,
+                  transactionId: transaction_id,
+                  baseRent: baseRentAmount,
+                  amenitiesTotal,
+                  lateFee: calculatedLateFee,
+                  amenities: paymentAmenities,
+                  forMonth: forMonthStr,
+                });
+              } catch (pdfErr) {
+                console.error("[recordRentPayment] PDF generation failed:", pdfErr);
+              }
+            }
             await NotificationService.sendPaymentReceipt({
               renterName: flat.renterName,
               email: flat.renterEmail,
@@ -768,7 +795,7 @@ class FinancialController {
               flatNumber: flat.number,
               houseName: flat.houseName,
               transactionId: transaction_id,
-              table_name: 'rent_payment',
+              table_name: "rent_payment",
               row_id: paymentId,
               breakdown: {
                 baseRent: baseRentAmount,
@@ -776,6 +803,7 @@ class FinancialController {
                 lateFee: calculatedLateFee,
               },
               status: finalStatus,
+              pdfBuffer: pdfBuffer || undefined,
             });
           } catch (notificationError) {
             console.error("Failed to send notification:", notificationError);
@@ -2068,6 +2096,25 @@ class FinancialController {
         }
       }
 
+      // If a PDF was previously sent and saved, attach it from storage
+      let pdfBuffer = null;
+      let paymentMeta = {};
+      try {
+        if (payment.metadata) {
+          paymentMeta = typeof payment.metadata === 'string' ? JSON.parse(payment.metadata) : payment.metadata;
+        }
+      } catch (_) {}
+      const invoicePdfPath = paymentMeta.invoicePdfPath;
+      if (invoicePdfPath && typeof invoicePdfPath === 'string') {
+        const relativePath = invoicePdfPath.replace(/^\//, '');
+        const absolutePath = path.join(__dirname, '..', '..', relativePath);
+        try {
+          pdfBuffer = await fs.readFile(absolutePath);
+        } catch (readErr) {
+          console.warn('[resendPaymentReceipt] Could not read saved PDF:', readErr.message);
+        }
+      }
+
       await NotificationService.sendPaymentReceipt({
         renterName: payment.renter_name,
         email: payment.renter_email,
@@ -2079,11 +2126,13 @@ class FinancialController {
         transactionId: payment.transaction_id || null,
         table_name: 'rent_payment',
         row_id: payment.id,
+        pdfBuffer: pdfBuffer || undefined,
       });
 
       return res.json({
         success: true,
         message: 'Payment receipt has been queued for delivery',
+        data: { withPdfAttachment: !!pdfBuffer },
       });
     } catch (error) {
       console.error('Resend payment receipt error:', error);

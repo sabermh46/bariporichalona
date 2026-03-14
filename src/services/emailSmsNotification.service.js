@@ -52,7 +52,7 @@ class NotificationService {
     }
 
     async sendPaymentReceipt(data) {
-        const { email, phone, renterName, amount, paymentDate, flatNumber, houseName, transactionId, table_name, row_id } = data;
+        const { email, phone, renterName, amount, paymentDate, flatNumber, houseName, transactionId, table_name, row_id, pdfBuffer } = data;
 
         const template = this.getTemplate('payment_receipt', {
             renter_name: renterName,
@@ -76,8 +76,11 @@ class NotificationService {
             };
             if (table_name) metadata.table_name = table_name;
             if (row_id != null) metadata.row_id = row_id;
+            const attachments = pdfBuffer && Buffer.isBuffer(pdfBuffer)
+                ? [{ filename: 'invoice.pdf', content: pdfBuffer }]
+                : null;
             promises.push(
-                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, metadata)
+                EmailService.sendEmail(email, template.email.subject, template.email.html, template.email.body, metadata, attachments)
                     .catch(err => console.error('Email send error:', err))
             );
         }
