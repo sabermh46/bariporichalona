@@ -10,7 +10,6 @@ const permissionService = require('../services/permission.service');
 const accessCache = require('../utils/accessCache');
 const { serializeBigInt } = require('../utils/serializer');
 const AppFeePaymentController = require('./appFeePayment.controller');
-const { generateRentInvoicePdf } = require('../generators/invoicePdf');
 class FinancialController {
   constructor() {
     // bind all to fix the this.function() reading indefined
@@ -25,10 +24,12 @@ class FinancialController {
     this.calculateMonthlyProfit = this.calculateMonthlyProfit.bind(this);
     this.getProfitReport = this.getProfitReport.bind(this);
     this.updateRentPayment = this.updateRentPayment.bind(this);
+    this.deleteRentPayment = this.deleteRentPayment.bind(this);
     this.getRefundDue = this.getRefundDue.bind(this);
     this.settleRefund = this.settleRefund.bind(this);
     this.resendPaymentReceipt = this.resendPaymentReceipt.bind(this);
     this.listPaymentReceipts = this.listPaymentReceipts.bind(this);
+    this.sendRentReceiptPdf = this.sendRentReceiptPdf.bind(this);
   }
 
   async calculateMonthlyProfit(req, res) {
@@ -760,56 +761,6 @@ class FinancialController {
         await trx.commit();
 
 
-        // Send receipt notification only for non-pending payments
-        if ((flat.renterEmail || flat.renterPhone) && finalStatus !== "pending") {
-          try {
-            let pdfBuffer = null;
-            if (String(send_pdf_attachment) === "true" && flat.renterEmail) {
-              try {
-                const forMonthStr = dueDate
-                  ? this.getForMonth(dueDate)
-                  : (currentPayment && currentPayment.for_month) || null;
-                pdfBuffer = await generateRentInvoicePdf({
-                  renterName: flat.renterName,
-                  houseName: flat.houseName,
-                  flatNumber: flat.number,
-                  totalAmount,
-                  paymentDate: actualPaidDate,
-                  transactionId: transaction_id,
-                  baseRent: baseRentAmount,
-                  amenitiesTotal,
-                  lateFee: calculatedLateFee,
-                  amenities: paymentAmenities,
-                  forMonth: forMonthStr,
-                });
-              } catch (pdfErr) {
-                console.error("[recordRentPayment] PDF generation failed:", pdfErr);
-              }
-            }
-            await NotificationService.sendPaymentReceipt({
-              renterName: flat.renterName,
-              email: flat.renterEmail,
-              phone: flat.renterPhone,
-              amount: totalAmount,
-              paymentDate: actualPaidDate,
-              flatNumber: flat.number,
-              houseName: flat.houseName,
-              transactionId: transaction_id,
-              table_name: "rent_payment",
-              row_id: paymentId,
-              breakdown: {
-                baseRent: baseRentAmount,
-                amenities: amenitiesTotal,
-                lateFee: calculatedLateFee,
-              },
-              status: finalStatus,
-              pdfBuffer: pdfBuffer || undefined,
-            });
-          } catch (notificationError) {
-            console.error("Failed to send notification:", notificationError);
-          }
-        }
-
         return res.json({
           success: true,
           data: {
@@ -954,6 +905,49 @@ class FinancialController {
         success: false,
         error: "Failed to update rent payment",
       });
+    }
+  }
+
+  // 1.2 Delete rent payment
+  async deleteRentPayment(req, res) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      const payment = await db("rent_payment")
+        .join("flat", "rent_payment.flat_id", "flat.id")
+        .join("house", "flat.house_id", "house.id")
+        .where("rent_payment.id", id)
+        .select("rent_payment.id", "house.id as houseId", "house.ownerId")
+        .first();
+
+      if (!payment) {
+        return res.status(404).json({ success: false, error: "Rent payment not found" });
+      }
+
+      let hasAccess = false;
+      if (currentUser.role.slug === "web_owner") {
+        hasAccess = true;
+      } else if (currentUser.role.slug === "house_owner") {
+        hasAccess = payment.ownerId === currentUser.id;
+      } else if (currentUser.role.slug === "staff") {
+        hasAccess = await permissionService.hasPermission(currentUser.id, "payments.delete");
+      } else if (currentUser.role.slug === "caretaker") {
+        hasAccess = await CaretakerPermissionService.hasCaretakerPermission(
+          currentUser.id, payment.houseId, "payments.delete"
+        );
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({ success: false, error: "You do not have permission to delete this payment" });
+      }
+
+      await db("rent_payment").where("id", id).delete();
+
+      return res.json({ success: true, message: "Payment deleted successfully" });
+    } catch (error) {
+      console.error("Delete rent payment error:", error);
+      return res.status(500).json({ success: false, error: "Failed to delete payment" });
     }
   }
 
@@ -2204,6 +2198,100 @@ class FinancialController {
         success: false,
         error: 'Failed to list payment receipts',
       });
+    }
+  }
+
+  // Receive a frontend-generated PDF (base64) and email it as the rent receipt
+  async sendRentReceiptPdf(req, res) {
+    try {
+      const { id } = req.params;
+      const { pdfBase64 } = req.body;
+      const userId = req.user.id;
+
+      if (!pdfBase64) {
+        return res.status(400).json({ success: false, error: 'pdfBase64 is required' });
+      }
+
+      const payment = await db('rent_payment')
+        .join('flat', 'rent_payment.flat_id', 'flat.id')
+        .join('house', 'rent_payment.house_id', 'house.id')
+        .leftJoin('renter', 'rent_payment.renter_id', 'renter.id')
+        .where('rent_payment.id', id)
+        .select(
+          'rent_payment.id',
+          'rent_payment.paid_amount',
+          'rent_payment.paid_date',
+          'rent_payment.transaction_id',
+          'rent_payment.metadata',
+          'rent_payment.house_id',
+          'flat.number as flat_number',
+          'house.name as house_name',
+          'renter.name as renter_name',
+          'renter.email as renter_email',
+          'renter.phone as renter_phone'
+        )
+        .first();
+
+      if (!payment) {
+        return res.status(404).json({ success: false, error: 'Payment not found' });
+      }
+      if (!payment.renter_email) {
+        return res.status(400).json({ success: false, error: 'Renter has no email on file' });
+      }
+
+      if (req.user.role.slug !== 'web_owner') {
+        const hasAccess = await this.checkHouseAccess(userId, payment.house_id);
+        if (!hasAccess) {
+          return res.status(403).json({ success: false, error: 'No permission for this house' });
+        }
+      }
+
+      const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+
+      // Save PDF to disk so resend can reuse it
+      const dirName = uuidv4();
+      const pdfDir = path.join(__dirname, '..', '..', 'uploads', 'pdfs', dirName);
+      await fs.mkdir(pdfDir, { recursive: true });
+      await fs.writeFile(path.join(pdfDir, 'invoice.pdf'), pdfBuffer);
+      const relativePdfPath = `uploads/pdfs/${dirName}/invoice.pdf`;
+
+      let paymentMeta = {};
+      try {
+        if (payment.metadata) {
+          paymentMeta = typeof payment.metadata === 'string'
+            ? JSON.parse(payment.metadata)
+            : payment.metadata;
+        }
+      } catch (_) {}
+      paymentMeta.invoicePdfPath = relativePdfPath;
+
+      await db('rent_payment').where('id', id).update({
+        metadata: JSON.stringify(paymentMeta),
+        updated_at: new Date(),
+      });
+
+      await NotificationService.sendPaymentReceipt({
+        renterName: payment.renter_name,
+        email: payment.renter_email,
+        phone: payment.renter_phone || null,
+        amount: payment.paid_amount,
+        paymentDate: payment.paid_date,
+        flatNumber: payment.flat_number,
+        houseName: payment.house_name,
+        transactionId: payment.transaction_id || null,
+        table_name: 'rent_payment',
+        row_id: payment.id,
+        pdfBuffer,
+      });
+
+      return res.json({
+        success: true,
+        message: 'Receipt queued for delivery',
+        data: { sentTo: payment.renter_email },
+      });
+    } catch (error) {
+      console.error('[sendRentReceiptPdf]', error);
+      return res.status(500).json({ success: false, error: 'Failed to send receipt' });
     }
   }
 

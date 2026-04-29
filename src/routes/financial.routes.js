@@ -114,6 +114,12 @@ router.put('/payments/rent/:id',
     FinancialController.updateRentPayment
 );
 
+router.delete('/payments/rent/:id',
+    authMiddleware,
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+    FinancialController.deleteRentPayment
+);
+
 router.get('/payments/app-fee',
     authMiddleware,
     roleMiddleware(['web_owner', 'staff', 'caretaker']), // Only web owner
@@ -168,6 +174,12 @@ router.post('/financial/resend-payment-receipt',
   authMiddleware,
   roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
   FinancialController.resendPaymentReceipt
+);
+
+router.post('/financial/rent-payment/:id/send-receipt',
+  authMiddleware,
+  roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
+  FinancialController.sendRentReceiptPdf
 );
 
 router.get('/financial/refund-due',
