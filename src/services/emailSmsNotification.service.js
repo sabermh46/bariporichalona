@@ -1,7 +1,83 @@
 // services/NotificationService.js - uses working EmailService for email delivery
+const fs = require('fs');
+const path = require('path');
 const EmailService = require('./email.service');
 
 class NotificationService {
+    _formatDate(value) {
+        if (!value) return '';
+        if (typeof value === 'object' && value.toLocaleDateString) {
+            return value.toLocaleDateString();
+        }
+        return String(value);
+    }
+
+    _getLogoDataUri() {
+        const explicitBase64 = process.env.APP_LOGO_BASE64;
+        if (explicitBase64) {
+            return explicitBase64.startsWith('data:')
+                ? explicitBase64
+                : `data:image/png;base64,${explicitBase64}`;
+        }
+
+        const logoPath = process.env.APP_LOGO_PATH;
+        if (logoPath) {
+            try {
+                const resolvedPath = path.isAbsolute(logoPath)
+                    ? logoPath
+                    : path.resolve(process.cwd(), logoPath);
+                if (fs.existsSync(resolvedPath)) {
+                    const extension = path.extname(resolvedPath).replace('.', '').toLowerCase() || 'png';
+                    const mimeType = extension === 'svg'
+                        ? 'image/svg+xml'
+                        : `image/${extension === 'jpg' ? 'jpeg' : extension}`;
+                    const fileBuffer = fs.readFileSync(resolvedPath);
+                    return `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
+                }
+            } catch (error) {
+                console.warn('[NotificationService] Failed to load logo asset:', error.message);
+            }
+        }
+
+        return null;
+    }
+
+    _buildBrandHeader(title, subtitle) {
+        const logoDataUri = this._getLogoDataUri();
+        const logoMarkup = logoDataUri
+            ? `<img src="${logoDataUri}" alt="${process.env.APP_NAME || 'Bari Porichalona'}" style="display:block; max-width:120px; max-height:48px; object-fit:contain; margin-bottom:14px;" />`
+            : `<div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; border-radius:16px; background:rgba(255,255,255,0.18); color:#ffffff; font-size:20px; font-weight:700; letter-spacing:0.5px; margin-bottom:14px;">BP</div>`;
+
+        return `
+            <div style="background: linear-gradient(135deg, #0f766e 0%, #14b8a6 52%, #0f172a 100%); padding: 28px 28px 24px; border-radius: 18px 18px 0 0; color: #ffffff;">
+                ${logoMarkup}
+                <div style="font-family: 'Segoe UI', Arial, sans-serif;">
+                    <div style="font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.85; margin-bottom: 8px;">${process.env.APP_NAME || 'Bari Porichalona'}</div>
+                    <h2 style="margin: 0; font-size: 24px; line-height: 1.2; font-weight: 700;">${title}</h2>
+                    ${subtitle ? `<p style="margin: 10px 0 0; font-size: 14px; line-height: 1.5; opacity: 0.9;">${subtitle}</p>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    _buildReportCard(label, value, accent = '#0f766e') {
+        return `
+            <div style="flex: 1 1 150px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px 18px; min-width: 150px;">
+                <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; margin-bottom: 8px;">${label}</div>
+                <div style="font-size: 18px; font-weight: 700; color: ${accent}; line-height: 1.2;">${value}</div>
+            </div>
+        `;
+    }
+
+    _buildMoneyRow(label, value, emphasis = false) {
+        return `
+            <tr>
+                <td style="padding: 10px 0; color: #374151; font-size: 14px; ${emphasis ? 'font-weight:700;' : ''}">${label}</td>
+                <td style="padding: 10px 0; text-align: right; color: #111827; font-size: 14px; ${emphasis ? 'font-weight:700;' : ''}">${value}</td>
+            </tr>
+        `;
+    }
+
     async sendRentReminder(data) {
         const { email, phone, renterName, flatNumber, houseName, amount, dueDate, houseOwnerName, flatId, houseId, renterId, table_name, row_id } = data;
 
@@ -13,7 +89,7 @@ class NotificationService {
             house_id: houseId,
             renter_id: renterId,
             amount: amount,
-            due_date: dueDate ? (typeof dueDate === 'object' && dueDate.toLocaleDateString ? dueDate.toLocaleDateString() : String(dueDate)) : '',
+            due_date: this._formatDate(dueDate),
             house_owner_name: houseOwnerName || ''
         });
 
@@ -57,10 +133,15 @@ class NotificationService {
         const template = this.getTemplate('payment_receipt', {
             renter_name: renterName,
             amount: amount,
-            payment_date: paymentDate ? (typeof paymentDate === 'object' && paymentDate.toLocaleDateString ? paymentDate.toLocaleDateString() : paymentDate) : '',
+            payment_date: this._formatDate(paymentDate),
             flat_number: flatNumber,
             house_name: houseName,
-            transaction_id: transactionId
+            transaction_id: transactionId,
+            status: data.status || 'paid',
+            base_rent: data.breakdown?.baseRent || 0,
+            amenities: data.breakdown?.amenities || 0,
+            late_fee: data.breakdown?.lateFee || 0,
+            total_amount: amount,
         });
 
         const promises = [];
@@ -215,22 +296,52 @@ class NotificationService {
                 sms: `Rent Reminder: ${data.amount} for ${data.house_name} due on ${data.due_date}. Please pay on time.`
             },
             payment_receipt: {
-                email: {
-                    subject: `Payment Receipt: ${data.amount} - ${data.house_name || 'Rent Payment'}`,
-                    body: `Dear ${data.renter_name},\n\nThank you for your payment of ${data.amount} for ${data.house_name} - Flat ${data.flat_number}.\n\nPayment Date: ${data.payment_date}\nTransaction ID: ${data.transaction_id || 'N/A'}\n\nBest regards,\n${appName}\n\nThis mail is sent from Bariporichalona.com`,
-                    html: `<div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;">
-                        <div style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
-                            <h2 style="margin: 0; font-size: 20px;">Payment Receipt</h2>
-                        </div>
-                        <div style="padding: 24px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
-                            <p>Dear <strong>${data.renter_name}</strong>,</p>
-                            <p>Thank you for your payment of <strong>${data.amount}</strong> for <strong>${data.house_name} - Flat ${data.flat_number}</strong>.</p>
-                            <p><strong>Payment Date:</strong> ${data.payment_date}<br><strong>Transaction ID:</strong> ${data.transaction_id || 'N/A'}</p>
-                            <p>Best regards,<br><strong>${appName}</strong></p>
-                            ${this._footer()}
-                        </div>
-                    </div>`
-                },
+                email: (() => {
+                    const subject = `Payment Receipt: ${data.amount} - ${data.house_name || 'Rent Payment'}`;
+                    const totalAmount = Number(data.total_amount || data.amount || 0);
+                    const baseRent = Number(data.base_rent || 0);
+                    const amenities = Number(data.amenities || 0);
+                    const lateFee = Number(data.late_fee || 0);
+
+                    return {
+                        subject,
+                        body: `Dear ${data.renter_name},\n\nYour rent payment has been recorded successfully.\n\nHouse: ${data.house_name || 'N/A'}\nFlat: ${data.flat_number || 'N/A'}\nPayment Date: ${data.payment_date || 'N/A'}\nTransaction ID: ${data.transaction_id || 'N/A'}\nTotal Paid: ${totalAmount.toFixed(2)}\n\nBest regards,\n${appName}\n\nThis mail is sent from Bariporichalona.com`,
+                        html: `
+                            <div style="background:#eef2f7; padding:24px 12px;">
+                                <div style="max-width: 680px; margin: 0 auto; font-family: 'Segoe UI', Arial, sans-serif; color: #1f2937; background: #ffffff; border-radius: 18px; overflow: hidden; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);">
+                                    ${this._buildBrandHeader('Payment Receipt', 'Rent payment recorded successfully and summarized below.')}
+                                    <div style="padding: 24px 28px 28px;">
+                                        <div style="margin-bottom: 22px; display: flex; flex-wrap: wrap; gap: 12px;">
+                                            ${this._buildReportCard('Renter', data.renter_name || 'N/A', '#0f766e')}
+                                            ${this._buildReportCard('House', data.house_name || 'N/A', '#0f766e')}
+                                            ${this._buildReportCard('Flat', data.flat_number != null ? String(data.flat_number) : 'N/A', '#0f766e')}
+                                            ${this._buildReportCard('Status', String(data.status || 'paid').toUpperCase(), '#0f766e')}
+                                        </div>
+
+                                        <div style="border: 1px solid #e5e7eb; border-radius: 16px; padding: 20px; background: #f8fafc; margin-bottom: 20px;">
+                                            <table style="width: 100%; border-collapse: collapse;">
+                                                ${this._buildMoneyRow('Payment Date', data.payment_date || 'N/A')}
+                                                ${this._buildMoneyRow('Transaction ID', data.transaction_id || 'N/A')}
+                                                ${this._buildMoneyRow('Base Rent', `BDT ${baseRent.toFixed(2)}`)}
+                                                ${amenities > 0 ? this._buildMoneyRow('Amenities', `BDT ${amenities.toFixed(2)}`) : ''}
+                                                ${lateFee > 0 ? this._buildMoneyRow('Late Fee', `BDT ${lateFee.toFixed(2)}`) : ''}
+                                                ${this._buildMoneyRow('Total Paid', `BDT ${totalAmount.toFixed(2)}`, true)}
+                                            </table>
+                                        </div>
+
+                                        <div style="padding: 18px 20px; border-left: 4px solid #14b8a6; background: #ecfeff; border-radius: 12px; color: #134e4a; margin-bottom: 22px;">
+                                            <p style="margin: 0 0 8px; font-size: 14px; line-height: 1.6;">Dear <strong>${data.renter_name || 'there'}</strong>, your payment has been recorded successfully.</p>
+                                            <p style="margin: 0; font-size: 14px; line-height: 1.6;">Please keep this email for your records. A PDF invoice may also be attached when enabled.</p>
+                                        </div>
+
+                                        <p style="margin: 0; font-size: 14px; line-height: 1.7;">Best regards,<br><strong>${appName}</strong></p>
+                                        ${this._footer()}
+                                    </div>
+                                </div>
+                            </div>
+                        `,
+                    };
+                })(),
                 sms: `Payment Receipt: ${data.amount} paid for ${data.house_name}. Thank you!`
             }
         };
