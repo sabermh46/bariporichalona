@@ -61,12 +61,28 @@ class NotificationController {
     }
 
     /**
-     * Format a notification row (with optional user join) into API shape.
-     * Includes redirectLink from payload when present.
+     * Whether a system_common notification has been read by the given user.
+     * Checks metadata.readBy array.
      */
-    _formatNotification(notification) {
+    _isSystemCommonReadByUser(payload, userId) {
+        if (!payload || !Array.isArray(payload.readBy)) return false;
+        const uid = String(userId);
+        return payload.readBy.some((id) => String(id) === uid);
+    }
+
+    /**
+     * Format a notification row (with optional user join) into API shape.
+     * For system_common notifications, computes effective read status from metadata.readBy.
+     */
+    _formatNotification(notification, currentUserId = null) {
         const payload = this._getNotificationPayload(notification);
         const data = payload && typeof payload === 'object' ? payload : null;
+
+        let isRead = Boolean(notification.read);
+        if (notification.type === TYPE_SYSTEM_COMMON && currentUserId != null) {
+            isRead = this._isSystemCommonReadByUser(data, currentUserId);
+        }
+
         return {
             id: notification.id,
             userId: notification.userId,
@@ -75,7 +91,7 @@ class NotificationController {
             message: notification.message,
             data: data,
             redirectLink: data && typeof data.redirectLink === 'string' ? data.redirectLink : '',
-            read: Boolean(notification.read),
+            read: isRead,
             readAt: notification.readAt,
             createdAt: notification.createdAt,
             user: notification.user_id ? {
@@ -85,6 +101,22 @@ class NotificationController {
                 avatarUrl: notification.user_avatarUrl
             } : null
         };
+    }
+
+    /**
+     * Compute unread count for system_common notifications for the given user.
+     * Fetches all system_common rows and filters by readBy in JS (list is always small).
+     */
+    async _countUnreadSystemCommon(userId) {
+        const rows = await db('notification')
+            .where('type', TYPE_SYSTEM_COMMON)
+            .whereNull('userId')
+            .select('metadata');
+
+        return rows.filter((n) => {
+            const payload = this._getNotificationPayload(n);
+            return !this._isSystemCommonReadByUser(payload, userId);
+        }).length;
     }
 
     /**
@@ -106,21 +138,29 @@ class NotificationController {
             const limitNum = parseInt(limit);
             const offset = (pageNum - 1) * limitNum;
             const roleSlug = req.user.role && req.user.role.slug ? req.user.role.slug : null;
+            const currentUserId = req.user.id;
+            const canSeeSystemCommon = this._seesSystemCommon(roleSlug);
 
-            let query = this._baseListQuery(req.user.id, roleSlug);
+            let query = this._baseListQuery(currentUserId, roleSlug);
 
             if (unread === 'true') {
-                query = query.where('read', false);
+                if (canSeeSystemCommon) {
+                    // Can't use simple WHERE read=false because system_common read state is
+                    // stored in metadata.readBy. Always include system_common rows here;
+                    // they'll be post-filtered after JS read-status resolution.
+                    query = query.where((builder) => {
+                        builder
+                            .where((b) => b.whereNot('type', TYPE_SYSTEM_COMMON).where('read', false))
+                            .orWhere((b) => b.where('type', TYPE_SYSTEM_COMMON).whereNull('userId'));
+                    });
+                } else {
+                    query = query.where('read', false);
+                }
             }
-            if (type) {
-                query = query.where('type', type);
-            }
-            if (startDate) {
-                query = query.where('createdAt', '>=', new Date(startDate));
-            }
-            if (endDate) {
-                query = query.where('createdAt', '<=', new Date(endDate));
-            }
+
+            if (type) query = query.where('type', type);
+            if (startDate) query = query.where('createdAt', '>=', new Date(startDate));
+            if (endDate) query = query.where('createdAt', '<=', new Date(endDate));
 
             const notifications = await query
                 .clone()
@@ -136,16 +176,44 @@ class NotificationController {
                 .limit(limitNum)
                 .offset(offset);
 
-            const baseForCount = this._baseListQuery(req.user.id, roleSlug);
-            const [totalResult] = await baseForCount.clone().count('* as total');
-            const [unreadResult] = await baseForCount.clone()
-                .where('read', false)
+            // Resolve effective read status per user for system_common rows
+            let formattedNotifications = notifications.map((n) => this._formatNotification(n, currentUserId));
+
+            // Post-filter: remove system_common rows the current user has already read
+            if (unread === 'true' && canSeeSystemCommon) {
+                formattedNotifications = formattedNotifications.filter((n) => !n.read);
+            }
+
+            // --- Counts ---
+            // Own unread count
+            const [ownUnreadResult] = await db('notification')
+                .where({ userId: currentUserId, read: false })
                 .count('* as count');
+            let unreadCount = parseInt(ownUnreadResult.count);
 
+            // system_common unread count (per-user, via JS)
+            if (canSeeSystemCommon) {
+                unreadCount += await this._countUnreadSystemCommon(currentUserId);
+            }
+
+            // Total count for pagination (using the same filtered base query)
+            const baseForCount = this._baseListQuery(currentUserId, roleSlug);
+            let countQuery = baseForCount.clone();
+            if (unread === 'true' && canSeeSystemCommon) {
+                countQuery = countQuery.where((builder) => {
+                    builder
+                        .where((b) => b.whereNot('type', TYPE_SYSTEM_COMMON).where('read', false))
+                        .orWhere((b) => b.where('type', TYPE_SYSTEM_COMMON).whereNull('userId'));
+                });
+            } else if (unread === 'true') {
+                countQuery = countQuery.where('read', false);
+            }
+            if (type) countQuery = countQuery.where('type', type);
+            if (startDate) countQuery = countQuery.where('createdAt', '>=', new Date(startDate));
+            if (endDate) countQuery = countQuery.where('createdAt', '<=', new Date(endDate));
+
+            const [totalResult] = await countQuery.count('* as total');
             const total = parseInt(totalResult.total);
-            const unreadCount = parseInt(unreadResult.count);
-
-            const formattedNotifications = notifications.map(n => this._formatNotification(n));
 
             res.json({
                 success: true,
@@ -171,15 +239,25 @@ class NotificationController {
 
     /**
      * Get a single notification by ID; marks it as read when fetched.
+     * Works for both user-owned and system_common notifications.
      */
     async getById(req, res) {
         try {
             const notificationId = req.params.id;
+            const roleSlug = req.user.role && req.user.role.slug ? req.user.role.slug : null;
 
             let notification = await db('notification as n')
-                .where({
-                    'n.id': notificationId,
-                    'n.userId': req.user.id
+                .where('n.id', notificationId)
+                .where((builder) => {
+                    builder
+                        .where('n.userId', req.user.id)
+                        .orWhere((b) => {
+                            if (this._seesSystemCommon(roleSlug)) {
+                                b.where('n.type', TYPE_SYSTEM_COMMON).whereNull('n.userId');
+                            } else {
+                                b.whereRaw('1 = 0');
+                            }
+                        });
                 })
                 .leftJoin('user as u', 'n.userId', 'u.id')
                 .select(
@@ -195,18 +273,24 @@ class NotificationController {
                 return res.status(404).json({ error: 'Notification not found' });
             }
 
-            if (!notification.read) {
+            if (notification.type === TYPE_SYSTEM_COMMON) {
+                const payload = this._getNotificationPayload(notification) || {};
+                const readBy = Array.isArray(payload.readBy) ? payload.readBy : [];
+                if (!readBy.some((id) => String(id) === String(req.user.id))) {
+                    readBy.push(req.user.id);
+                    const newMetadata = JSON.stringify({ ...payload, readBy });
+                    await db('notification').where('id', notificationId).update({ metadata: newMetadata });
+                    notification.metadata = newMetadata;
+                }
+            } else if (!notification.read) {
                 await db('notification')
                     .where('id', notificationId)
-                    .update({
-                        read: true,
-                        readAt: new Date()
-                    });
+                    .update({ read: true, readAt: new Date() });
                 notification.read = true;
                 notification.readAt = new Date();
             }
 
-            const formatted = this._formatNotification(notification);
+            const formatted = this._formatNotification(notification, req.user.id);
             res.json({
                 success: true,
                 notification: serializeBigInt(formatted)
@@ -219,33 +303,53 @@ class NotificationController {
 
     /**
      * Mark a single notification as read.
+     * For system_common: adds current user to metadata.readBy.
+     * For regular: sets read=true on the record.
      */
     async markAsRead(req, res) {
         try {
             const notificationId = req.params.id;
+            const roleSlug = req.user.role && req.user.role.slug ? req.user.role.slug : null;
 
-            const updatedCount = await db('notification')
-                .where({
-                    id: notificationId,
-                    userId: req.user.id
-                })
-                .update({
-                    read: true,
-                    readAt: new Date()
+            const notification = await db('notification').where('id', notificationId).first();
+
+            if (!notification) {
+                return res.status(404).json({ error: 'Notification not found' });
+            }
+
+            if (notification.type === TYPE_SYSTEM_COMMON) {
+                if (!this._seesSystemCommon(roleSlug)) {
+                    return res.status(403).json({ error: 'Not authorized' });
+                }
+
+                const payload = this._getNotificationPayload(notification) || {};
+                const readBy = Array.isArray(payload.readBy) ? payload.readBy : [];
+                if (!readBy.some((id) => String(id) === String(req.user.id))) {
+                    readBy.push(req.user.id);
+                    const newMetadata = JSON.stringify({ ...payload, readBy });
+                    await db('notification').where('id', notificationId).update({ metadata: newMetadata });
+                }
+
+                return res.json({
+                    success: true,
+                    message: 'Notification marked as read',
+                    notification: serializeBigInt(await db('notification').where('id', notificationId).first())
                 });
+            }
+
+            // Regular notification
+            const updatedCount = await db('notification')
+                .where({ id: notificationId, userId: req.user.id })
+                .update({ read: true, readAt: new Date() });
 
             if (updatedCount === 0) {
                 return res.status(404).json({ error: 'Notification not found' });
             }
 
-            const notification = await db('notification')
-                .where('id', notificationId)
-                .first();
-
-            res.json({
+            return res.json({
                 success: true,
                 message: 'Notification marked as read',
-                notification: serializeBigInt(notification)
+                notification: serializeBigInt(await db('notification').where('id', notificationId).first())
             });
         } catch (error) {
             console.error('Mark as read error:', error);
@@ -255,23 +359,41 @@ class NotificationController {
 
     /**
      * Mark all notifications as read for the current user.
+     * For system_common: adds current user to readBy on every system_common row.
      */
     async markAllAsRead(req, res) {
         try {
-            const result = await db('notification')
-                .where({
-                    userId: req.user.id,
-                    read: false
-                })
-                .update({
-                    read: true,
-                    readAt: new Date()
-                });
+            const roleSlug = req.user.role && req.user.role.slug ? req.user.role.slug : null;
+
+            // Mark user's own notifications
+            const ownCount = await db('notification')
+                .where({ userId: req.user.id, read: false })
+                .update({ read: true, readAt: new Date() });
+
+            let systemCommonCount = 0;
+            if (this._seesSystemCommon(roleSlug)) {
+                const systemRows = await db('notification')
+                    .where('type', TYPE_SYSTEM_COMMON)
+                    .whereNull('userId')
+                    .select('id', 'metadata');
+
+                for (const notif of systemRows) {
+                    const payload = this._getNotificationPayload(notif) || {};
+                    const readBy = Array.isArray(payload.readBy) ? payload.readBy : [];
+                    if (!readBy.some((id) => String(id) === String(req.user.id))) {
+                        readBy.push(req.user.id);
+                        await db('notification')
+                            .where('id', notif.id)
+                            .update({ metadata: JSON.stringify({ ...payload, readBy }) });
+                        systemCommonCount++;
+                    }
+                }
+            }
 
             res.json({
                 success: true,
                 message: 'All notifications marked as read',
-                count: result
+                count: ownCount + systemCommonCount
             });
         } catch (error) {
             console.error('Mark all as read error:', error);
@@ -281,16 +403,14 @@ class NotificationController {
 
     /**
      * Delete a single notification.
+     * Only user-owned notifications can be deleted (system_common cannot).
      */
     async deleteById(req, res) {
         try {
             const notificationId = req.params.id;
 
             const deletedCount = await db('notification')
-                .where({
-                    id: notificationId,
-                    userId: req.user.id
-                })
+                .where({ id: notificationId, userId: req.user.id })
                 .del();
 
             if (deletedCount === 0) {
@@ -308,15 +428,12 @@ class NotificationController {
     }
 
     /**
-     * Delete all read notifications for the current user.
+     * Delete all read notifications for the current user (user-owned only).
      */
     async deleteAllRead(req, res) {
         try {
             const result = await db('notification')
-                .where({
-                    userId: req.user.id,
-                    read: true
-                })
+                .where({ userId: req.user.id, read: true })
                 .del();
 
             res.json({
@@ -332,7 +449,7 @@ class NotificationController {
 
     /**
      * Get notification statistics summary.
-     * Uses same visibility as list (system_common + own for web_owner/staff).
+     * Unread count accounts for system_common per-user read state.
      */
     async getStatsSummary(req, res) {
         try {
@@ -342,37 +459,21 @@ class NotificationController {
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
             const userId = req.user.id;
             const roleSlug = req.user.role && req.user.role.slug ? req.user.role.slug : null;
+            const canSeeSystemCommon = this._seesSystemCommon(roleSlug);
             const baseQuery = () => this._baseListQuery(userId, roleSlug);
 
-            const [total, unread, today, thisWeek, thisMonth, byType, last7Days] = await Promise.all([
-                baseQuery()
-                    .count('* as total')
-                    .then(result => parseInt(result[0].total)),
+            const [total, ownUnread, today, thisWeek, thisMonth, byType, last7Days] = await Promise.all([
+                baseQuery().count('* as total').then((r) => parseInt(r[0].total)),
 
-                baseQuery()
-                    .where('read', false)
-                    .count('* as count')
-                    .then(result => parseInt(result[0].count)),
+                db('notification').where({ userId, read: false }).count('* as count').then((r) => parseInt(r[0].count)),
 
-                baseQuery()
-                    .where('createdAt', '>=', startOfDay)
-                    .count('* as count')
-                    .then(result => parseInt(result[0].count)),
+                baseQuery().where('createdAt', '>=', startOfDay).count('* as count').then((r) => parseInt(r[0].count)),
 
-                baseQuery()
-                    .where('createdAt', '>=', startOfWeek)
-                    .count('* as count')
-                    .then(result => parseInt(result[0].count)),
+                baseQuery().where('createdAt', '>=', startOfWeek).count('* as count').then((r) => parseInt(r[0].count)),
 
-                baseQuery()
-                    .where('createdAt', '>=', startOfMonth)
-                    .count('* as count')
-                    .then(result => parseInt(result[0].count)),
+                baseQuery().where('createdAt', '>=', startOfMonth).count('* as count').then((r) => parseInt(r[0].count)),
 
-                baseQuery()
-                    .select('type')
-                    .count('* as count')
-                    .groupBy('type'),
+                baseQuery().select('type').count('* as count').groupBy('type'),
 
                 (async () => {
                     const days = [];
@@ -385,14 +486,17 @@ class NotificationController {
                             .where('createdAt', '>=', start)
                             .where('createdAt', '<', end)
                             .count('* as count');
-                        days.push({
-                            date: date.toISOString().split('T')[0],
-                            count: parseInt(result.count)
-                        });
+                        days.push({ date: date.toISOString().split('T')[0], count: parseInt(result.count) });
                     }
                     return days;
                 })()
             ]);
+
+            // Accurate unread: own + system_common not yet read by this user
+            let unread = ownUnread;
+            if (canSeeSystemCommon) {
+                unread += await this._countUnreadSystemCommon(userId);
+            }
 
             res.json({
                 success: true,
@@ -402,10 +506,7 @@ class NotificationController {
                     today,
                     thisWeek,
                     thisMonth,
-                    byType: byType.map(item => ({
-                        type: item.type,
-                        count: parseInt(item.count)
-                    })),
+                    byType: byType.map((item) => ({ type: item.type, count: parseInt(item.count) })),
                     last7Days
                 }
             });
@@ -417,29 +518,50 @@ class NotificationController {
 
     /**
      * Mark multiple notifications as read by IDs.
+     * Handles a mixed list of regular and system_common notifications.
      */
     async batchMarkAsRead(req, res) {
         try {
             const { notificationIds } = req.body;
 
             if (!notificationIds || !Array.isArray(notificationIds)) {
-                return res.status(400).json({
-                    error: 'notificationIds array is required'
-                });
+                return res.status(400).json({ error: 'notificationIds array is required' });
             }
 
-            const result = await db('notification')
+            const notifications = await db('notification')
                 .whereIn('id', notificationIds)
-                .where('userId', req.user.id)
-                .update({
-                    read: true,
-                    readAt: new Date()
-                });
+                .select('id', 'type', 'userId', 'metadata');
+
+            const regularIds = [];
+            let systemCommonCount = 0;
+
+            for (const notif of notifications) {
+                if (notif.type === TYPE_SYSTEM_COMMON) {
+                    const payload = this._getNotificationPayload(notif) || {};
+                    const readBy = Array.isArray(payload.readBy) ? payload.readBy : [];
+                    if (!readBy.some((id) => String(id) === String(req.user.id))) {
+                        readBy.push(req.user.id);
+                        await db('notification')
+                            .where('id', notif.id)
+                            .update({ metadata: JSON.stringify({ ...payload, readBy }) });
+                        systemCommonCount++;
+                    }
+                } else if (String(notif.userId) === String(req.user.id)) {
+                    regularIds.push(notif.id);
+                }
+            }
+
+            let regularCount = 0;
+            if (regularIds.length > 0) {
+                regularCount = await db('notification')
+                    .whereIn('id', regularIds)
+                    .update({ read: true, readAt: new Date() });
+            }
 
             res.json({
                 success: true,
                 message: 'Notifications marked as read',
-                count: result
+                count: regularCount + systemCommonCount
             });
         } catch (error) {
             console.error('Batch read error:', error);
@@ -449,39 +571,63 @@ class NotificationController {
 
     /**
      * Toggle read status of a notification.
+     * For system_common: toggles current user's presence in metadata.readBy.
      */
     async toggleRead(req, res) {
         try {
             const notificationId = req.params.id;
+            const roleSlug = req.user.role && req.user.role.slug ? req.user.role.slug : null;
 
-            const notification = await db('notification')
-                .where({
-                    id: notificationId,
-                    userId: req.user.id
-                })
-                .first();
+            const notification = await db('notification').where('id', notificationId).first();
 
             if (!notification) {
                 return res.status(404).json({ error: 'Notification not found' });
             }
 
-            const newReadStatus = !notification.read;
+            if (notification.type === TYPE_SYSTEM_COMMON) {
+                if (!this._seesSystemCommon(roleSlug)) {
+                    return res.status(403).json({ error: 'Not authorized' });
+                }
 
-            await db('notification')
-                .where('id', notificationId)
-                .update({
-                    read: newReadStatus,
-                    readAt: newReadStatus ? new Date() : null
+                const payload = this._getNotificationPayload(notification) || {};
+                const readBy = Array.isArray(payload.readBy) ? payload.readBy : [];
+                const uid = String(req.user.id);
+                const isCurrentlyRead = readBy.some((id) => String(id) === uid);
+
+                const newReadBy = isCurrentlyRead
+                    ? readBy.filter((id) => String(id) !== uid)
+                    : [...readBy, req.user.id];
+
+                const newMetadata = JSON.stringify({ ...payload, readBy: newReadBy });
+                await db('notification').where('id', notificationId).update({ metadata: newMetadata });
+
+                const updated = await db('notification').where('id', notificationId).first();
+                return res.json({
+                    success: true,
+                    message: `Notification marked as ${!isCurrentlyRead ? 'read' : 'unread'}`,
+                    notification: serializeBigInt(updated)
                 });
+            }
 
-            const updatedNotification = await db('notification')
-                .where('id', notificationId)
+            // Regular notification
+            const notification2 = await db('notification')
+                .where({ id: notificationId, userId: req.user.id })
                 .first();
 
+            if (!notification2) {
+                return res.status(404).json({ error: 'Notification not found' });
+            }
+
+            const newReadStatus = !notification2.read;
+            await db('notification')
+                .where('id', notificationId)
+                .update({ read: newReadStatus, readAt: newReadStatus ? new Date() : null });
+
+            const updated = await db('notification').where('id', notificationId).first();
             res.json({
                 success: true,
                 message: `Notification marked as ${newReadStatus ? 'read' : 'unread'}`,
-                notification: serializeBigInt(updatedNotification)
+                notification: serializeBigInt(updated)
             });
         } catch (error) {
             console.error('Toggle read error:', error);
@@ -511,9 +657,11 @@ class NotificationController {
             throw new Error('createSystemCommonNotification: message is required and must be non-empty');
         }
 
+        // readBy starts empty — no one has read the new notification yet
         const metadata = {
             ...(typeof data === 'object' && data !== null ? data : {}),
-            redirectLink: typeof redirectLink === 'string' ? redirectLink : ''
+            redirectLink: typeof redirectLink === 'string' ? redirectLink : '',
+            readBy: []
         };
 
         try {

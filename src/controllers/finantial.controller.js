@@ -4,6 +4,7 @@ const fs = require('fs').promises;
 const db = require('../config/knex');
 const { v4: uuidv4 } = require('uuid');
 const NotificationService = require('../services/emailSmsNotification.service');
+const notify = require('../services/inAppNotification.service');
 const CaretakerPermissionService = require('../services/CaretakerPermission.service');
 const HouseController = require('./house.controller');
 const permissionService = require('../services/permission.service');
@@ -760,6 +761,20 @@ class FinancialController {
 
         await trx.commit();
 
+        // Notify house owner + caretakers when actual money was collected
+        if (finalStatus === 'paid' || finalStatus === 'partial') {
+          const amountStr = `৳${Number(totalAmount).toLocaleString()}`;
+          notify.notifyHouseStakeholders(
+            flat.house_id,
+            {
+              title: 'Rent Collected',
+              message: `${flat.renterName || 'A renter'} paid ${amountStr} for Flat #${flat_id}${flat.houseName ? ` – ${flat.houseName}` : ''}`,
+              type: 'success',
+              redirectLink: `/flats/${flat_id}`,
+            },
+            req.user.id,
+          ).catch((e) => console.error('[notify] recordRentPayment:', e));
+        }
 
         return res.json({
           success: true,
@@ -778,8 +793,8 @@ class FinancialController {
             metadata: paymentMetadata,
             action: currentPayment ? "payment_recorded" : "pending_due_created",
           },
-          message: currentPayment ? 
-            "Payment recorded successfully" : 
+          message: currentPayment ?
+            "Payment recorded successfully" :
             "Pending due created successfully",
         });
       } catch (error) {

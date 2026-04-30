@@ -3,6 +3,7 @@ const AuthService = require('../services/auth.service');
 const db = require('../config/knex');
 const { hashPassword } = require('../utils/password');
 const notificationController = require('./notification.controller');
+const notify = require('../services/inAppNotification.service');
 
 class UserManagementController {
 
@@ -62,12 +63,21 @@ class UserManagementController {
                 }
             );
             
+            if (result.user?.id) {
+                notify.notifyUser(result.user.id, {
+                    title: 'Welcome to the Team',
+                    message: `Your staff account has been created. You can now log in with your email.`,
+                    type: 'success',
+                    redirectLink: '/dashboard',
+                }).catch((e) => console.error('[notify] createStaff:', e));
+            }
+
             res.status(201).json({
                 success: true,
                 data: result.user,
                 message: 'Staff account created successfully'
             });
-            
+
         } catch (error) {
             console.error('Create staff error:', error);
             res.status(500).json({
@@ -494,11 +504,23 @@ class UserManagementController {
                     updatedAt: new Date()
                 });
             
+            const statusMessages = {
+                active: 'Your account has been activated.',
+                inactive: 'Your account has been deactivated.',
+                suspended: 'Your account has been suspended. Please contact support.',
+            };
+            notify.notifyUser(id, {
+                title: 'Account Status Changed',
+                message: statusMessages[status] || `Your account status has been changed to ${status}.`,
+                type: status === 'active' ? 'success' : 'warning',
+                redirectLink: '/dashboard',
+            }).catch((e) => console.error('[notify] updateUserStatus:', e));
+
             res.json({
                 success: true,
                 message: `User status updated to ${status}`
             });
-            
+
         } catch (error) {
             console.error('Update user status error:', error);
             res.status(500).json({

@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require("uuid");
 const { hasPermission } = require("../services/permission.service");
 const { getAccessibleHouseOwners } = require("./common/index");
 const CaretakerPermissionService = require("../services/CaretakerPermission.service");
+const notify = require("../services/inAppNotification.service");
 
 class FlatController {
   constructor() {
@@ -941,6 +942,18 @@ class FlatController {
 
           await trx.commit();
 
+          // Notify house owner + caretakers about the new renter assignment
+          notify.notifyHouseStakeholders(
+            flat.house_id,
+            {
+              title: 'Renter Assigned',
+              message: `${renter.name || 'A renter'} has been assigned to Flat #${id}`,
+              type: 'info',
+              redirectLink: `/flats/${id}`,
+            },
+            userId,
+          ).catch((e) => console.error('[notify] assignRenter:', e));
+
           return res.json({
             success: true,
             data: {
@@ -1652,6 +1665,18 @@ class FlatController {
           });
 
         await trx.commit();
+
+        // Notify house owner + caretakers about the renter removal
+        notify.notifyHouseStakeholders(
+          flat.house_id,
+          {
+            title: 'Renter Removed',
+            message: `A renter has been removed from Flat #${id}${flat.house_name ? ` – ${flat.house_name}` : ''}`,
+            type: 'warning',
+            redirectLink: `/flats/${id}`,
+          },
+          userId,
+        ).catch((e) => console.error('[notify] removeRenter:', e));
 
         return res.json({
           success: true,

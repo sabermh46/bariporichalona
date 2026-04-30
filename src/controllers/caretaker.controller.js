@@ -3,6 +3,7 @@ const db = require("../config/knex");
 const { v4: uuid } = require("uuid");
 const { serializeBigInt } = require("../utils/serializer");
 const PermissionService = require("../services/permission.service");
+const notify = require("../services/inAppNotification.service");
 
 class CaretakerController {
 
@@ -522,6 +523,13 @@ class CaretakerController {
         }
       });
 
+      notify.notifyUser(assignment.caretakerId, {
+        title: 'Permissions Updated',
+        message: `Your permissions for ${assignment.name || assignment.address || 'a house'} have been updated`,
+        type: 'info',
+        redirectLink: '/dashboard',
+      }).catch((e) => console.error('[notify] caretaker updateAssignmentPermissions:', e));
+
       res.json({
         success: true,
         message: "Permissions updated successfully",
@@ -633,6 +641,24 @@ class CaretakerController {
         return assignmentId;
       });
 
+      // Notify the caretaker they have a new assignment
+      notify.notifyUser(Number(caretakerId), {
+        title: 'New House Assignment',
+        message: `You have been assigned to manage ${house.name || house.address || 'a house'}`,
+        type: 'info',
+        redirectLink: '/dashboard',
+      }).catch((e) => console.error('[notify] caretaker assignToHouse:', e));
+
+      // Notify the house owner (unless they were the one who made the assignment)
+      if (house.ownerId && String(house.ownerId) !== String(currentUser.id)) {
+        notify.notifyUser(house.ownerId, {
+          title: 'Caretaker Assigned',
+          message: `${caretaker.name || 'A caretaker'} has been assigned to your ${house.name || 'house'}`,
+          type: 'info',
+          redirectLink: '/caretakers',
+        }).catch((e) => console.error('[notify] house owner assignToHouse:', e));
+      }
+
       res.status(201).json({
         success: true,
         message: "Caretaker assigned successfully",
@@ -691,6 +717,22 @@ class CaretakerController {
           revokedAt: new Date(),
           revokedBy: currentUser.id,
         });
+
+      notify.notifyUser(assignment.caretakerId, {
+        title: 'Assignment Ended',
+        message: `Your assignment to ${assignment.name || assignment.address || 'a house'} has been removed`,
+        type: 'warning',
+        redirectLink: '/dashboard',
+      }).catch((e) => console.error('[notify] caretaker removeFromHouse:', e));
+
+      if (assignment.ownerId && String(assignment.ownerId) !== String(currentUser.id)) {
+        notify.notifyUser(assignment.ownerId, {
+          title: 'Caretaker Removed',
+          message: `A caretaker has been removed from your ${assignment.name || 'house'}`,
+          type: 'info',
+          redirectLink: '/caretakers',
+        }).catch((e) => console.error('[notify] house owner removeFromHouse:', e));
+      }
 
       res.json({
         success: true,
