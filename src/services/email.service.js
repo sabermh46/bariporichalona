@@ -194,6 +194,57 @@ class EmailService {
     });
   }
 
+  async sendWelcomeCredentialsEmail(email, name = null, password) {
+    const loginUrl = `${process.env.CLIENT_URL}/login`;
+    const subject = `Your ${process.env.APP_NAME} Account Credentials`;
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Account Created</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #f9873c; padding: 20px; text-align: center; color: #fff; border-radius: 4px 4px 0 0; }
+          .content { padding: 30px; background-color: #ffffff; border: 1px solid #e0e0e0; }
+          .credentials { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 16px; margin: 20px 0; }
+          .credentials p { margin: 6px 0; }
+          .credentials strong { display: inline-block; width: 90px; color: #555; }
+          .button { display: inline-block; padding: 12px 28px; background-color: #f9873c; color: #fff; text-decoration: none; border-radius: 4px; margin: 20px 0; font-weight: bold; }
+          .warning { color: #856404; background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px 14px; border-radius: 4px; font-size: 13px; margin-top: 16px; }
+          .footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee; font-size: 12px; color: #888; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header"><h2 style="margin:0">Welcome to ${process.env.APP_NAME}</h2></div>
+          <div class="content">
+            <p>Hello ${name || 'there'},</p>
+            <p>An account has been created for you. Use the credentials below to log in:</p>
+            <div class="credentials">
+              <p><strong>Email:</strong> ${email}</p>
+              <p><strong>Password:</strong> ${password}</p>
+            </div>
+            <div style="text-align:center">
+              <a href="${loginUrl}" class="button">Log In Now</a>
+            </div>
+            <p class="warning">⚠️ Please change your password immediately after your first login.</p>
+            <p>Best regards,<br>${process.env.APP_NAME} Team</p>
+          </div>
+          <div class="footer">This is an automated message. Please do not reply to this email.<br>
+            © ${new Date().getFullYear()} ${process.env.APP_NAME}. All rights reserved.
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail(email, subject, html, null, { type: 'welcome_credentials', name });
+  }
+
   async sendPasswordChangedEmail(email, name = null) {
     const subject = 'Password Changed Successfully';
 

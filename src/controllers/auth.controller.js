@@ -352,7 +352,7 @@ class AuthController {
   // Get system settings
   async getSystemSettings(req, res) {
     try {
-      const settings = await db('system_setting')
+      const settings = await db('systemsetting')
         .where(function() {
           this.where('isPublic', true)
               .orWhere('category', 'registration');
@@ -376,28 +376,28 @@ class AuthController {
         return res.status(403).json({ error: 'Only web owner can update system settings' });
       }
 
-      const existingSetting = await db('system_setting')
+      const existingSetting = await db('systemsetting')
         .where('key', key)
         .first();
 
       let setting;
-      
+
       if (existingSetting) {
         // Update existing
-        await db('system_setting')
+        await db('systemsetting')
           .where('key', key)
           .update({
             value: JSON.stringify(value),
             type: typeof value,
             updatedAt: new Date()
           });
-        
-        setting = await db('system_setting')
+
+        setting = await db('systemsetting')
           .where('key', key)
           .first();
       } else {
         // Insert new
-        const [id] = await db('system_setting').insert({
+        const [id] = await db('systemsetting').insert({
           key,
           value: JSON.stringify(value),
           type: typeof value,
@@ -406,8 +406,8 @@ class AuthController {
           createdAt: new Date(),
           updatedAt: new Date()
         });
-        
-        setting = await db('system_setting')
+
+        setting = await db('systemsetting')
           .where('id', id)
           .first();
       }
@@ -420,7 +420,7 @@ class AuthController {
 
   async getPublicRegistrationStatus(req, res) {
     try {
-      const setting = await db('system_setting')
+      const setting = await db('systemsetting')
         .where('key', 'registration.public_enabled')
         .first();
       
@@ -434,7 +434,7 @@ class AuthController {
   // Get user's login-as sessions
   async getLoginAsSessions(req, res) {
     try {
-      const sessions = await db('user_login_as as ula')
+      const sessions = await db('userloginas as ula')
         .where(function() {
           this.where('ula.userId', req.user.id)
               .orWhere('ula.targetUserId', req.user.id);
@@ -443,7 +443,7 @@ class AuthController {
         .leftJoin('user as tu', 'ula.targetUserId', 'tu.id')
         .leftJoin('role as ur', 'u.roleId', 'ur.id')
         .leftJoin('role as tur', 'tu.roleId', 'tur.id')
-        .leftJoin('role as or', 'ula.originalRoleId', 'or.id')
+        .leftJoin('role as orig_role', 'ula.originalRoleId', 'orig_role.id')
         .select(
           'ula.*',
           'u.id as user_id',
@@ -454,7 +454,7 @@ class AuthController {
           'tu.name as target_user_name',
           'tu.email as target_user_email',
           'tur.slug as target_user_role_slug',
-          'or.slug as original_role_slug'
+          'orig_role.slug as original_role_slug'
         )
         .orderBy('ula.createdAt', 'desc');
 
@@ -463,10 +463,9 @@ class AuthController {
         id: session.id,
         userId: session.userId,
         targetUserId: session.targetUserId,
-        sessionToken: session.sessionToken,
         originalRoleId: session.originalRoleId,
         reason: session.reason,
-        endedAt: session.endedAt,
+        expiresAt: session.expiresAt,
         createdAt: session.createdAt,
         user: {
           id: session.user_id,

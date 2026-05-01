@@ -601,7 +601,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
 
     const { hash, salt } = await hashPassword(password);
 
-    return await db.transaction(async (trx) => {
+    const result = await db.transaction(async (trx) => {
       // Create new user
       const [userId] = await trx('user').insert({
         uuid: uuidv4(),
@@ -707,6 +707,13 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
         registrationToken
       };
     });
+
+    if (sendEmail) {
+      emailService.sendWelcomeCredentialsEmail(result.user.email, result.user.name, password)
+        .catch((e) => console.error('[createUserAccount] welcome email failed:', e));
+    }
+
+    return result;
   }
 
 
@@ -722,6 +729,62 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
     if (!child.parentId) return false;
 
     return await this.checkUserHierarchy(parentId, child.parentId);
+  }
+
+  async loginAs(callerId, targetUserId, reason) {
+    const roleHierarchy = { 'web_owner': 100, 'staff': 80, 'house_owner': 60, 'caretaker': 40 };
+
+    const [caller, target] = await Promise.all([
+      db('user').where('user.id', callerId)
+        .leftJoin('role', 'user.roleId', 'role.id')
+        .select('user.*', 'role.slug as role_slug', 'role.id as role_id')
+        .first(),
+      db('user').where('user.id', targetUserId)
+        .leftJoin('role', 'user.roleId', 'role.id')
+        .select('user.*', 'role.slug as role_slug')
+        .first(),
+    ]);
+
+    if (!caller) throw new Error('Caller user not found');
+    if (!target) throw new Error('Target user not found');
+    if (target.status !== 'active') throw new Error('Target account is not active');
+
+    const callerRank = roleHierarchy[caller.role_slug] || 0;
+    const targetRank = roleHierarchy[target.role_slug] || 0;
+    if (callerRank <= targetRank) {
+      throw new Error(`You cannot login as a ${target.role_slug} account`);
+    }
+
+    // One active session per (caller, target) pair — replace any existing one.
+    await db('userloginas').where({ userId: callerId, targetUserId: target.id }).delete();
+
+    const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8 hours
+    const [sessionId] = await db('userloginas').insert({
+      userId: callerId,
+      targetUserId: target.id,
+      originalRoleId: caller.role_id,
+      reason: reason || null,
+      expiresAt,
+      createdAt: new Date(),
+    });
+
+    const tokens = await createTokens(target.id.toString());
+    const permissions = await permissionService.getUserPermissions(target.id);
+
+    return {
+      ...tokens,
+      sessionId: String(sessionId),
+      originalUserId: String(callerId),
+      user: {
+        id: target.id,
+        email: target.email,
+        name: target.name,
+        role: { slug: target.role_slug },
+        status: target.status,
+      },
+      permission: permissions,
+      message: 'Now logged in as target user. Store sessionId to exit this session.',
+    };
   }
 
   async exitLoginAs(loginSessionId, currentUserId) {
@@ -743,7 +806,7 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
         throw new Error("Login-as session not found");
       }
 
-      if (session.userId !== currentUserId) {
+      if (String(session.targetUserId) !== String(currentUserId)) {
         throw new Error("You can only exit your own login-as sessions");
       }
 
