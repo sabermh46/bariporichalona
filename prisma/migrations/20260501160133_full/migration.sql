@@ -66,6 +66,7 @@ CREATE TABLE `rent_payment` (
     `notes` TEXT NULL,
     `base_amount` DECIMAL(10, 2) NULL,
     `amenities_charge` DECIMAL(10, 2) NULL,
+    `advance_used` DECIMAL(10, 2) NULL,
     `metadata` LONGTEXT NULL,
     `created_by` BIGINT NULL,
     `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
@@ -111,14 +112,16 @@ CREATE TABLE `app_fee_payment` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `uuid` VARCHAR(36) NULL,
     `house_owner_id` BIGINT NOT NULL,
-    `house_id` BIGINT NOT NULL,
+    `house_count` INTEGER NOT NULL DEFAULT 1,
     `amount` DECIMAL(10, 2) NOT NULL,
     `fee_type` ENUM('monthly_subscription', 'transaction_fee', 'service_charge') NOT NULL,
-    `due_date` DATE NOT NULL,
+    `start_date` DATE NOT NULL,
     `paid_date` DATE NULL,
+    `subscription_days` INTEGER NOT NULL DEFAULT 30,
+    `offset_days` INTEGER NOT NULL DEFAULT 5,
     `payment_method` ENUM('cash', 'bank', 'mobile_banking', 'other') NULL,
     `transaction_id` VARCHAR(100) NULL,
-    `status` ENUM('pending', 'paid', 'overdue') NULL DEFAULT 'pending',
+    `status` ENUM('pending', 'paid', 'overdue', 'cancelled') NULL DEFAULT 'pending',
     `invoice_url` VARCHAR(500) NULL,
     `metadata` LONGTEXT NULL,
     `created_at` TIMESTAMP(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
@@ -129,11 +132,11 @@ CREATE TABLE `app_fee_payment` (
     `verified_at` TIMESTAMP(0) NULL,
 
     UNIQUE INDEX `app_fee_payment_uuid_key`(`uuid`),
-    INDEX `app_fee_payment_house_id_fkey`(`house_id`),
     INDEX `app_fee_payment_house_owner_id_fkey`(`house_owner_id`),
     INDEX `app_fee_payment_verified_by_fkey`(`verified_by`),
     INDEX `app_fee_payment_deleted_at_idx`(`deleted_at`),
     INDEX `app_fee_payment_created_at_idx`(`created_at`),
+    INDEX `app_fee_payment_paid_date_idx`(`paid_date`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -248,7 +251,7 @@ CREATE TABLE `notice` (
 CREATE TABLE `notification` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `uuid` VARCHAR(36) NOT NULL,
-    `userId` BIGINT NOT NULL,
+    `userId` BIGINT NULL,
     `title` VARCHAR(191) NOT NULL,
     `message` VARCHAR(191) NOT NULL,
     `type` VARCHAR(191) NOT NULL DEFAULT 'info',
@@ -443,6 +446,8 @@ CREATE TABLE `emaillog` (
     `status` VARCHAR(20) NOT NULL DEFAULT 'sent',
     `error` VARCHAR(191) NULL,
     `metadata` LONGTEXT NULL,
+    `table_name` VARCHAR(100) NULL,
+    `row_id` BIGINT NULL,
     `sentAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `deliveredAt` DATETIME(3) NULL,
     `openedAt` DATETIME(3) NULL,
@@ -450,6 +455,7 @@ CREATE TABLE `emaillog` (
     INDEX `EmailLog_toEmail_idx`(`toEmail`),
     INDEX `EmailLog_type_idx`(`type`),
     INDEX `EmailLog_sentAt_idx`(`sentAt`),
+    INDEX `EmailLog_table_row_idx`(`table_name`, `row_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -661,9 +667,6 @@ ALTER TABLE `house_expense` ADD CONSTRAINT `house_expense_house_id_fkey` FOREIGN
 
 -- AddForeignKey
 ALTER TABLE `house_expense` ADD CONSTRAINT `house_expense_paid_by_fkey` FOREIGN KEY (`paid_by`) REFERENCES `user`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_house_id_fkey` FOREIGN KEY (`house_id`) REFERENCES `house`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `app_fee_payment` ADD CONSTRAINT `app_fee_payment_house_owner_id_fkey` FOREIGN KEY (`house_owner_id`) REFERENCES `user`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
