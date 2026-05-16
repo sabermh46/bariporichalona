@@ -81,6 +81,14 @@ class AuthService {
       .first();
 
     if (setting) {
+      // LONGTEXT stores everything as a string; deserialize to the correct type
+      // so booleans like 'false' are not treated as truthy by callers.
+      if (setting.type === 'boolean') {
+        return setting.value === 'true' || setting.value === '1' || setting.value === 1 || setting.value === true;
+      }
+      if (setting.type === 'number') {
+        return Number(setting.value);
+      }
       return setting.value;
     }
 

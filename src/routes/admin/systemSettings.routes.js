@@ -29,6 +29,23 @@ router.get('/email-stats', (req, res) => {
     }
 });
 
+// Deserialize a raw DB setting row into a typed value the frontend expects.
+// The `value` column is LONGTEXT so everything comes back as a string.
+// Booleans may be stored as 'true'/'false', '1'/'0', or even 1/0 from old inserts.
+function deserializeSetting(setting) {
+    let value = setting.value;
+    try {
+        if (setting.type === 'boolean') {
+            value = value === 'true' || value === '1' || value === 1 || value === true;
+        } else if (setting.type === 'number') {
+            value = Number(value);
+        } else if (setting.type === 'array' || setting.type === 'object') {
+            value = JSON.parse(value);
+        }
+    } catch (_) { /* leave raw */ }
+    return { ...setting, value };
+}
+
 // Get all system settings
 router.get('/', async (req, res) => {
     try {
@@ -36,10 +53,10 @@ router.get('/', async (req, res) => {
             .select('*')
             .orderBy('category', 'asc')
             .orderBy('key', 'asc');
-        
+
         res.json({
             success: true,
-            data: systemSettings
+            data: systemSettings.map(deserializeSetting),
         });
     } catch (error) {
         console.error("Error fetching system settings:", error);
@@ -57,17 +74,17 @@ router.get('/:key', async (req, res) => {
         const setting = await db('systemsetting')
             .where({ key })
             .first();
-        
+
         if (!setting) {
             return res.status(404).json({
                 success: false,
                 error: "System setting not found."
             });
         }
-        
+
         res.json({
             success: true,
-            data: setting
+            data: deserializeSetting(setting),
         });
     } catch (error) {
         console.error("Error fetching system setting:", error);
@@ -92,11 +109,12 @@ router.patch('/:id', async (req, res) => {
             });
         }
         
-        // Parse value based on type
+        // Parse value based on type. Booleans are stored as the strings 'true'/'false'
+        // so that mysql2 reads them back consistently from LONGTEXT without '0'/'1' confusion.
         let parsedValue;
         try {
             if (type === 'boolean') {
-                parsedValue = Boolean(value);
+                parsedValue = (value === true || value === 'true') ? 'true' : 'false';
             } else if (type === 'number') {
                 parsedValue = Number(value);
                 if (isNaN(parsedValue)) {
@@ -142,10 +160,10 @@ router.patch('/:id', async (req, res) => {
         const updatedSetting = await db('systemsetting')
             .where({ id: BigInt(id) })
             .first();
-        
+
         res.json({
             success: true,
-            data: updatedSetting,
+            data: deserializeSetting(updatedSetting),
             message: "System setting updated successfully."
         });
     } catch (error) {

@@ -1,0 +1,226 @@
+// src/services/landingPage.service.js
+const fs = require('fs');
+const path = require('path');
+
+const DATA_DIR  = path.join(__dirname, '../../data');
+const DATA_FILE = path.join(DATA_DIR, 'landingPage.json');
+
+const SECTIONS = ['nav', 'hero', 'why', 'features', 'personas', 'how_it_works', 'pricing', 'demo_slider', 'testimonials', 'cta', 'footer'];
+
+const DEFAULTS = {
+  nav: {
+    brand_name: 'Bari Porichalona',
+    links: [
+      { label: 'Home', href: '#' },
+      { label: 'Features', href: '#features' },
+      { label: 'Pricing', href: '#pricing' },
+      { label: 'Contact', href: '#contact' },
+    ],
+    cta_login: 'Login',
+    cta_signup: 'Sign Up',
+  },
+
+  hero: {
+    badge: 'Made for Bangladesh',
+    title_before: 'Simplify Your ',
+    title_highlight: 'House Rent',
+    title_after: ' Management',
+    subtitle: 'From rent collection to maintenance requests, manage everything in one place. Designed for house owners, caretakers, and tenants.',
+    cta_primary: 'Get Started Free',
+    cta_secondary: 'Watch Demo',
+    trust_secure: 'Bank-level Security',
+    trust_no_card: 'No Credit Card',
+    stats: [
+      { value: '100+', label: 'Properties Managed' },
+      { value: '1Cr+', label: 'Rent Processed' },
+      { value: '500+', label: 'Happy Users' },
+    ],
+    trusted_by: 'Trusted by landlords across Dhaka, Chattogram & beyond',
+  },
+
+  why: {
+    title: "Rent Management Shouldn't Be a Headache",
+    subtitle: 'Spreadsheets, WhatsApp reminders, and paper ledgers don\'t scale. Bari Porichalona brings everything into one place.',
+    without_title: 'Without Bari Porichalona',
+    without_points: [
+      'Chasing rent via calls and messages',
+      'No single view of all properties and tenants',
+      'Notices lost in group chats',
+      'Manual expense and loan tracking',
+    ],
+    with_title: 'With Bari Porichalona',
+    with_points: [
+      'Automated reminders and payment tracking',
+      'One dashboard for houses, flats, and renters',
+      'Notice board and push notifications',
+      'Expenses, app fees, and loans in one place',
+    ],
+  },
+
+  features: {
+    badge: 'Everything in one platform',
+    title: 'Built for How You Work',
+    subtitle: 'Houses, rent, notices, expenses, and reports—all with the right access for owners, caretakers, and staff.',
+    items: [
+      { icon: 'House', title: 'House & Flat Management', description: 'Manage multiple properties, track occupancy, and organize flats efficiently.' },
+      { icon: 'Wallet', title: 'Rent Collection', description: 'Automated rent reminders, payment tracking, and late fee handling.' },
+      { icon: 'Megaphone', title: 'Notice Board', description: 'Send announcements, maintenance alerts, and important notices instantly.' },
+      { icon: 'Shield', title: 'Role-Based Access', description: 'Dashboards for owners, caretakers, and staff with the right permissions.' },
+      { icon: 'Smartphone', title: 'PWA & Mobile Ready', description: 'Install as an app, use offline, and get push notifications.' },
+      { icon: 'BarChart3', title: 'Analytics & Reports', description: 'Track performance, generate financial reports, and get insights.' },
+    ],
+  },
+
+  personas: {
+    title: 'For Everyone in the Rent Chain',
+    subtitle: 'Whether you own properties, manage them, or live in one—Bari Porichalona adapts to your role.',
+    items: [
+      { icon: 'UserCheck', title: 'House Owners', description: 'See all properties, rent status, expenses, and reports in one place. Invite caretakers and staff with controlled access.' },
+      { icon: 'Users', title: 'Caretakers & Staff', description: 'Manage day-to-day: collect rent info, post notices, track expenses and loans—all from your dashboard.' },
+      { icon: 'House', title: 'Tenants', description: 'Get notices and reminders in one app. Clear view of rent and dues. (Tenant features coming soon.)' },
+    ],
+  },
+
+  how_it_works: {
+    title: 'How Bari Porichalona Works',
+    subtitle: 'Four simple steps from signup to full control.',
+    steps: [
+      { title: 'Sign Up', text: 'Create your account as owner, caretaker, or staff. Use email or Google.' },
+      { title: 'Add Properties', text: 'Add houses, flats, and tenant information to the system.' },
+      { title: 'Manage & Collect', text: 'Send rent reminders, track payments, and manage requests.' },
+      { title: 'Stay Updated', text: 'Get notifications, view reports, and run everything from the dashboard.' },
+    ],
+  },
+
+  pricing: {
+    title: 'Simple, Transparent Pricing',
+    subtitle: 'Start free. Scale as you grow. No hidden fees.',
+    tiers: [
+      {
+        title: 'Free to Start',
+        description: 'Get started with core features at no cost.',
+        features: ['Houses & flats', 'Rent & notices', 'Basic reports'],
+        cta: 'Get Started Free',
+        is_coming_soon: false,
+        is_highlighted: false,
+      },
+      {
+        title: 'Pro (Coming Soon)',
+        description: 'More properties, advanced reports, and priority support.',
+        features: ['Everything in Free', 'Advanced analytics', 'Priority support'],
+        cta: 'Coming Soon',
+        is_coming_soon: true,
+        is_highlighted: true,
+      },
+    ],
+  },
+
+  demo_slider: {
+    title: 'See Bari Porichalona in Action',
+    subtitle: 'Explore the key features that help property owners across Bangladesh manage smarter.',
+    slides: [
+      { tag: 'Property Management', title: 'All Your Properties, One Dashboard', description: "Get a bird's-eye view of every house, flat, and renter. Monitor occupancy, rent status, and dues at a glance without switching between spreadsheets.", image_key: 'building', image_url: null },
+      { tag: 'House Management', title: 'Houses & Flats at a Glance', description: 'Organize flats within each house, track availability, and assign renters in seconds. Search, filter, and manage your entire portfolio from one screen.', image_key: 'houses', image_url: null },
+      { tag: 'Rent & Payments', title: 'Rent Collection Made Simple', description: 'Record payments, auto-calculate late fees, and send WhatsApp/SMS reminders. Full payment history, advance deposits, and receipts—all in one place.', image_key: 'laptop', image_url: null },
+      { tag: 'Renter Profiles', title: 'Know Every Renter', description: 'Maintain complete renter profiles with contact info, NID details, move-in dates, and payment history. Assign, transfer, or remove renters with a few clicks.', image_key: 'profile', image_url: null },
+    ],
+  },
+
+  testimonials: {
+    title: 'Loved by Property Managers',
+    subtitle: 'See what house owners and caretakers say about Bari Porichalona.',
+    items: [
+      { quote: "Finally stopped chasing rent on WhatsApp. Everything is in one place and reminders go out automatically.", name: 'House Owner', role: 'Dhaka', avatar_url: null, rating: 5 },
+      { quote: "Managing multiple houses used to be messy. Bari Porichalona's dashboard and reports made it simple.", name: 'Caretaker', role: 'Dhaka', avatar_url: null, rating: 5 },
+    ],
+  },
+
+  cta: {
+    title: 'Ready to Simplify Your Rent Management?',
+    subtitle: 'Join property owners and caretakers who use Bari Porichalona every day.',
+    button_label: 'Get Started Free',
+    disclaimer: 'No credit card required',
+  },
+
+  footer: {
+    tagline: 'Simplifying house rent management since 2024',
+    email: 'support@bariporichalona.com',
+    phone: '+880 1712 345678',
+    product_links: [
+      { label: 'Features', href: '#features' },
+      { label: 'Pricing', href: '#pricing' },
+      { label: 'Demo', href: '#demo' },
+    ],
+    company_links: [
+      { label: 'About Us', href: '#about' },
+      { label: 'Contact', href: '#contact' },
+      { label: 'Privacy Policy', href: '#privacy' },
+    ],
+    social_links: [],
+  },
+};
+
+class LandingPageService {
+  _read() {
+    if (!fs.existsSync(DATA_FILE)) {
+      this._write(DEFAULTS);
+      return { ...DEFAULTS };
+    }
+    try {
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+    } catch (_) {
+      return { ...DEFAULTS };
+    }
+  }
+
+  _write(data) {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  }
+
+  // Ensure data file exists — called on server startup
+  initialize() {
+    if (!fs.existsSync(DATA_FILE)) {
+      this._write(DEFAULTS);
+    }
+  }
+
+  // Returns all sections — used by the public API
+  getAll() {
+    const data = this._read();
+    // Ensure every known section is present (fills any gap from old files)
+    for (const section of SECTIONS) {
+      if (!data[section]) data[section] = DEFAULTS[section];
+    }
+    return data;
+  }
+
+  getSection(section) {
+    const data = this._read();
+    return data[section] || DEFAULTS[section] || null;
+  }
+
+  updateSection(section, sectionData, updatedBy = null) {
+    if (!SECTIONS.includes(section)) {
+      throw new Error(`Unknown section: ${section}`);
+    }
+    const all = this._read();
+    all[section] = { ...sectionData, _updatedAt: new Date().toISOString() };
+    this._write(all);
+    return all[section];
+  }
+
+  // Reset a section to built-in defaults
+  resetSection(section) {
+    if (!DEFAULTS[section]) throw new Error(`No default for section: ${section}`);
+    return this.updateSection(section, DEFAULTS[section], null);
+  }
+
+  getDefaults() {
+    return DEFAULTS;
+  }
+}
+
+module.exports = new LandingPageService();

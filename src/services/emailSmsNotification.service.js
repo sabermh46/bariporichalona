@@ -128,7 +128,7 @@ class NotificationService {
     }
 
     async sendPaymentReceipt(data) {
-        const { email, phone, renterName, amount, paymentDate, flatNumber, houseName, transactionId, table_name, row_id, pdfBuffer } = data;
+        const { email, phone, renterName, amount, paymentDate, flatNumber, houseName, houseAddress, ownerEmail, ownerPhone, transactionId, table_name, row_id, pdfBuffer } = data;
 
         const template = this.getTemplate('payment_receipt', {
             renter_name: renterName,
@@ -136,6 +136,9 @@ class NotificationService {
             payment_date: this._formatDate(paymentDate),
             flat_number: flatNumber,
             house_name: houseName,
+            house_address: houseAddress || null,
+            owner_email: ownerEmail || null,
+            owner_phone: ownerPhone || null,
             transaction_id: transactionId,
             status: data.status || 'paid',
             base_rent: data.breakdown?.baseRent || 0,
@@ -328,6 +331,16 @@ class NotificationService {
                                                 ${this._buildMoneyRow('Total Paid', `BDT ${totalAmount.toFixed(2)}`, true)}
                                             </table>
                                         </div>
+
+                                        ${(data.house_address || data.owner_email || data.owner_phone) ? `
+                                        <div style="border: 1px solid #d1fae5; border-radius: 16px; padding: 16px 20px; background: #f0fdf4; margin-bottom: 20px;">
+                                            <p style="margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #065f46; letter-spacing: 0.05em; text-transform: uppercase;">Property &amp; Owner Details</p>
+                                            <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #1f2937;">
+                                                ${data.house_address ? `<tr><td style="padding: 5px 0; color: #6b7280; width: 130px;">Address</td><td style="padding: 5px 0;">${data.house_address}</td></tr>` : ''}
+                                                ${data.owner_email ? `<tr><td style="padding: 5px 0; color: #6b7280;">Owner Email</td><td style="padding: 5px 0;"><a href="mailto:${data.owner_email}" style="color: #0f766e; text-decoration: none;">${data.owner_email}</a></td></tr>` : ''}
+                                                ${data.owner_phone ? `<tr><td style="padding: 5px 0; color: #6b7280;">Owner Phone</td><td style="padding: 5px 0;">${data.owner_phone}</td></tr>` : ''}
+                                            </table>
+                                        </div>` : ''}
 
                                         <div style="padding: 18px 20px; border-left: 4px solid #14b8a6; background: #ecfeff; border-radius: 12px; color: #134e4a; margin-bottom: 22px;">
                                             <p style="margin: 0 0 8px; font-size: 14px; line-height: 1.6;">Dear <strong>${data.renter_name || 'there'}</strong>, your payment has been recorded successfully.</p>

@@ -2061,15 +2061,19 @@ class FinancialController {
         .join('flat', 'rent_payment.flat_id', 'flat.id')
         .join('house', 'rent_payment.house_id', 'house.id')
         .leftJoin('renter', 'rent_payment.renter_id', 'renter.id')
+        .leftJoin('user as owner', 'house.ownerId', 'owner.id')
         .where('rent_payment.id', rent_payment_id)
         .select(
           'rent_payment.*',
           'flat.number as flat_number',
           'house.name as house_name',
+          'house.address as house_address',
           'house.id as house_id',
           'renter.name as renter_name',
           'renter.email as renter_email',
-          'renter.phone as renter_phone'
+          'renter.phone as renter_phone',
+          'owner.email as owner_email',
+          'owner.phone as owner_phone'
         )
         .first();
 
@@ -2132,6 +2136,9 @@ class FinancialController {
         paymentDate: payment.paid_date,
         flatNumber: payment.flat_number,
         houseName: payment.house_name,
+        houseAddress: payment.house_address || null,
+        ownerEmail: payment.owner_email || null,
+        ownerPhone: payment.owner_phone || null,
         transactionId: payment.transaction_id || null,
         table_name: 'rent_payment',
         row_id: payment.id,
@@ -2231,6 +2238,7 @@ class FinancialController {
         .join('flat', 'rent_payment.flat_id', 'flat.id')
         .join('house', 'rent_payment.house_id', 'house.id')
         .leftJoin('renter', 'rent_payment.renter_id', 'renter.id')
+        .leftJoin('user as owner', 'house.ownerId', 'owner.id')
         .where('rent_payment.id', id)
         .select(
           'rent_payment.id',
@@ -2241,9 +2249,12 @@ class FinancialController {
           'rent_payment.house_id',
           'flat.number as flat_number',
           'house.name as house_name',
+          'house.address as house_address',
           'renter.name as renter_name',
           'renter.email as renter_email',
-          'renter.phone as renter_phone'
+          'renter.phone as renter_phone',
+          'owner.email as owner_email',
+          'owner.phone as owner_phone'
         )
         .first();
 
@@ -2293,6 +2304,9 @@ class FinancialController {
         paymentDate: payment.paid_date,
         flatNumber: payment.flat_number,
         houseName: payment.house_name,
+        houseAddress: payment.house_address || null,
+        ownerEmail: payment.owner_email || null,
+        ownerPhone: payment.owner_phone || null,
         transactionId: payment.transaction_id || null,
         table_name: 'rent_payment',
         row_id: payment.id,

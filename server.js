@@ -60,6 +60,8 @@ const caretakerRoutes = require("./src/routes/caretaker.routes");
 const imageRoutes = require('./src/routes/image.routes');
 const appFeesRoutes = require('./src/routes/appFees.routes');
 const loanRoutes = require('./src/routes/loan.routes');
+const { publicRouter: landingPublicRouter, adminRouter: landingAdminRouter } = require('./src/routes/landingPage.routes');
+const landingPageService = require('./src/services/landingPage.service');
 
 
 // app.use('/api/images', imageRoutes);
@@ -84,6 +86,8 @@ app.use('/caretakers', caretakerRoutes);
 app.use('/house-owner-analytics', require('./src/routes/houseOwnerAnalytics.routes'));
 app.use('/app-fees', appFeesRoutes);
 app.use('/api/loans', loanRoutes);
+app.use('/api/public', landingPublicRouter);
+app.use('/admin/landing-config', landingAdminRouter);
 
 // router.use('/user-management', userManagementRoutes);
 
@@ -92,5 +96,7 @@ app.get("/", (req, res) => {
   res.send("Server is running");
 });
 
+
+landingPageService.initialize();
 
 app.listen(port,()=> console.log(`lISTENING TO PORT ${port}`))

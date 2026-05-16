@@ -72,11 +72,22 @@ router.get("/login/failed", (req, res)=>{
 
 router.get(
     "/google/callback",
-    passport.authenticate("google", {
-        failureRedirect: `${process.env.CLIENT_URL}/login?error=google_auth_failed`
-    }),
-    (req, res) => {
-        res.redirect(`${process.env.CLIENT_URL}/auth/success`);
+    (req, res, next) => {
+        passport.authenticate("google", (err, user, info) => {
+            if (err) return next(err);
+            if (!user) {
+                // Map passport failure message to a frontend error code
+                const msg = info?.message || '';
+                const errorCode = msg.includes('Account not found') || msg.includes('register first')
+                    ? 'registration_disabled'
+                    : 'google_auth_failed';
+                return res.redirect(`${process.env.CLIENT_URL}/login?error=${errorCode}`);
+            }
+            req.logIn(user, (loginErr) => {
+                if (loginErr) return next(loginErr);
+                return res.redirect(`${process.env.CLIENT_URL}/auth/success`);
+            });
+        })(req, res, next);
     }
 );
 

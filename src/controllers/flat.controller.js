@@ -389,12 +389,15 @@ class FlatController {
       const flat = await db("flat")
         .leftJoin("house", "flat.house_id", "house.id")
         .leftJoin("renter", "flat.renter_id", "renter.id")
+        .leftJoin("user as owner", "house.ownerId", "owner.id")
         .where("flat.id", id)
         .select(
           "flat.*",
           "house.name as houseName",
           "house.address as houseAddress",
           "house.ownerId",
+          "owner.email as ownerEmail",
+          "owner.phone as ownerPhone",
           "renter.name as renterName",
           "renter.phone as renterPhone",
           "renter.email as renterEmail",
