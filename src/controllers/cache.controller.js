@@ -10,7 +10,7 @@ class CacheController {
     async getCacheStats(req, res) {
         try {
             if (req.user.role.slug !== 'web_owner' && req.user.role.slug !== 'developer') {
-                return res.status(403).json({ error: 'Access denied' });
+                return res.status(403).json({ error: 'Access denied||প্রবেশ অনুমোদিত নয়' });
             }
 
             const stats = permissionCache.getStats();
@@ -28,7 +28,7 @@ class CacheController {
     async clearUserCache(req, res) {
         try {
             if (req.user.role.slug !== 'web_owner' && req.user.role.slug !== 'developer') {
-                return res.status(403).json({ error: 'Access denied' });
+                return res.status(403).json({ error: 'Access denied||প্রবেশ অনুমোদিত নয়' });
             }
 
             const { userId } = req.params;
@@ -54,7 +54,7 @@ class CacheController {
     async clearRoleCache(req, res) {
         try {
             if (req.user.role.slug !== 'web_owner' && req.user.role.slug !== 'developer') {
-                return res.status(403).json({ error: 'Access denied' });
+                return res.status(403).json({ error: 'Access denied||প্রবেশ অনুমোদিত নয়' });
             }
 
             const { roleId } = req.params;
@@ -78,7 +78,7 @@ class CacheController {
     async warmUpCache(req, res) {
         try {
             if (req.user.role.slug !== 'web_owner' && req.user.role.slug !== 'developer') {
-                return res.status(403).json({ error: 'Access denied' });
+                return res.status(403).json({ error: 'Access denied||প্রবেশ অনুমোদিত নয়' });
             }
 
             const users = await db('users').where({ status: 'active' }).select('id');
@@ -103,7 +103,7 @@ class CacheController {
     async getMemoryUsage(req, res) {
         try {
             if (req.user.role.slug !== 'web_owner' && req.user.role.slug !== 'developer') {
-                return res.status(403).json({ error: 'Access denied' });
+                return res.status(403).json({ error: 'Access denied||প্রবেশ অনুমোদিত নয়' });
             }
 
             const memoryUsage = process.memoryUsage();

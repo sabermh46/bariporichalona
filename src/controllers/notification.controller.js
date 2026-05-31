@@ -233,7 +233,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Get notifications error:', error);
-            res.status(500).json({ error: 'Failed to fetch notifications' });
+            res.status(500).json({ error: 'Failed to fetch notifications||বিজ্ঞপ্তি আনতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -270,7 +270,7 @@ class NotificationController {
                 .first();
 
             if (!notification) {
-                return res.status(404).json({ error: 'Notification not found' });
+                return res.status(404).json({ error: 'Notification not found||বিজ্ঞপ্তি খুঁজে পাওয়া যায়নি' });
             }
 
             if (notification.type === TYPE_SYSTEM_COMMON) {
@@ -297,7 +297,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Get notification error:', error);
-            res.status(500).json({ error: 'Failed to fetch notification' });
+            res.status(500).json({ error: 'Failed to fetch notification||বিজ্ঞপ্তি আনতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -314,12 +314,12 @@ class NotificationController {
             const notification = await db('notification').where('id', notificationId).first();
 
             if (!notification) {
-                return res.status(404).json({ error: 'Notification not found' });
+                return res.status(404).json({ error: 'Notification not found||বিজ্ঞপ্তি খুঁজে পাওয়া যায়নি' });
             }
 
             if (notification.type === TYPE_SYSTEM_COMMON) {
                 if (!this._seesSystemCommon(roleSlug)) {
-                    return res.status(403).json({ error: 'Not authorized' });
+                    return res.status(403).json({ error: 'Not authorized||অনুমোদিত নয়' });
                 }
 
                 const payload = this._getNotificationPayload(notification) || {};
@@ -343,7 +343,7 @@ class NotificationController {
                 .update({ read: true, readAt: new Date() });
 
             if (updatedCount === 0) {
-                return res.status(404).json({ error: 'Notification not found' });
+                return res.status(404).json({ error: 'Notification not found||বিজ্ঞপ্তি খুঁজে পাওয়া যায়নি' });
             }
 
             return res.json({
@@ -353,7 +353,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Mark as read error:', error);
-            res.status(500).json({ error: 'Failed to mark notification as read' });
+            res.status(500).json({ error: 'Failed to mark notification as read||বিজ্ঞপ্তি পঠিত চিহ্নিত করতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -397,7 +397,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Mark all as read error:', error);
-            res.status(500).json({ error: 'Failed to mark all notifications as read' });
+            res.status(500).json({ error: 'Failed to mark all notifications as read||সব বিজ্ঞপ্তি পঠিত চিহ্নিত করতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -414,7 +414,7 @@ class NotificationController {
                 .del();
 
             if (deletedCount === 0) {
-                return res.status(404).json({ error: 'Notification not found' });
+                return res.status(404).json({ error: 'Notification not found||বিজ্ঞপ্তি খুঁজে পাওয়া যায়নি' });
             }
 
             res.json({
@@ -423,7 +423,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Delete notification error:', error);
-            res.status(500).json({ error: 'Failed to delete notification' });
+            res.status(500).json({ error: 'Failed to delete notification||বিজ্ঞপ্তি মুছতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -443,7 +443,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Delete all read error:', error);
-            res.status(500).json({ error: 'Failed to delete read notifications' });
+            res.status(500).json({ error: 'Failed to delete read notifications||পঠিত বিজ্ঞপ্তি মুছতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -512,7 +512,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Stats error:', error);
-            res.status(500).json({ error: 'Failed to fetch notification statistics' });
+            res.status(500).json({ error: 'Failed to fetch notification statistics||বিজ্ঞপ্তির পরিসংখ্যান আনতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -525,7 +525,7 @@ class NotificationController {
             const { notificationIds } = req.body;
 
             if (!notificationIds || !Array.isArray(notificationIds)) {
-                return res.status(400).json({ error: 'notificationIds array is required' });
+                return res.status(400).json({ error: 'notificationIds array is required||বিজ্ঞপ্তি আইডি তালিকা আবশ্যক' });
             }
 
             const notifications = await db('notification')
@@ -565,7 +565,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Batch read error:', error);
-            res.status(500).json({ error: 'Failed to mark notifications as read' });
+            res.status(500).json({ error: 'Failed to mark notifications as read||বিজ্ঞপ্তিগুলো পঠিত চিহ্নিত করতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -581,12 +581,12 @@ class NotificationController {
             const notification = await db('notification').where('id', notificationId).first();
 
             if (!notification) {
-                return res.status(404).json({ error: 'Notification not found' });
+                return res.status(404).json({ error: 'Notification not found||বিজ্ঞপ্তি খুঁজে পাওয়া যায়নি' });
             }
 
             if (notification.type === TYPE_SYSTEM_COMMON) {
                 if (!this._seesSystemCommon(roleSlug)) {
-                    return res.status(403).json({ error: 'Not authorized' });
+                    return res.status(403).json({ error: 'Not authorized||অনুমোদিত নয়' });
                 }
 
                 const payload = this._getNotificationPayload(notification) || {};
@@ -615,7 +615,7 @@ class NotificationController {
                 .first();
 
             if (!notification2) {
-                return res.status(404).json({ error: 'Notification not found' });
+                return res.status(404).json({ error: 'Notification not found||বিজ্ঞপ্তি খুঁজে পাওয়া যায়নি' });
             }
 
             const newReadStatus = !notification2.read;
@@ -631,7 +631,7 @@ class NotificationController {
             });
         } catch (error) {
             console.error('Toggle read error:', error);
-            res.status(500).json({ error: 'Failed to toggle notification read status' });
+            res.status(500).json({ error: 'Failed to toggle notification read status||বিজ্ঞপ্তির পঠিত স্ট্যাটাস পরিবর্তন করতে ব্যর্থ হয়েছে' });
         }
     }
 

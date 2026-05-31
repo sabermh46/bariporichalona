@@ -4,4 +4,7 @@ node_modules
 
 /src/generated/prisma
 
-/src/generated/prisma
+# User-uploaded files (runtime data — not source code)
+uploads/avatars/
+uploads/renters/
+uploads/pdfs/

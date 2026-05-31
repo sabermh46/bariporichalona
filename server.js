@@ -1,4 +1,5 @@
 require("dotenv").config();
+const { version } = require('./package.json');
 const express = require("express");
 const cors = require("cors");
 const passport = require("passport");
@@ -12,31 +13,48 @@ const notificationRoutes = require('./src/routes/notification.routes');
 const fileAccessMiddleware = require('./src//middleware/fileAccessMiddleware');
 const path = require("path");
 
-// app.use(bodyParser.json());
-// app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
 require("./src/config/passport");
 const { bigIntSerializer } = require("./src/utils/serializer");
 
 app.set("trust proxy", 1);
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(bigIntSerializer);
+const allowedOrigins = [
+  "http://localhost:3005",
+  "http://localhost:4173",
+  ...(process.env.NGROK_URL ? [process.env.NGROK_URL] : []),
+  ...(process.env.EXTRA_ORIGINS ? process.env.EXTRA_ORIGINS.split(',').map(o => o.trim()) : []),
+];
+
 app.use(
   cors({
-    origin: ["http://localhost:3005", "http://localhost:4173", '**.ngrok-free.app'],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (server-to-server, curl, Postman)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
+    },
     methods: "GET,POST,PUT,DELETE,PATCH",
-    credentials: true, 
+    credentials: true,
   })
 );
 
+if (!process.env.SESSION_SECRET) {
+  console.error('FATAL: SESSION_SECRET env var is not set');
+  process.exit(1);
+}
 app.use(
   session({
-    secret: "bariporichaloona",
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    },
   })
 );
 app.use(passport.initialize());
@@ -66,8 +84,11 @@ const landingPageService = require('./src/services/landingPage.service');
 
 // app.use('/api/images', imageRoutes);
 
-// Static files: uploads (including /uploads/pdfs/<id>/invoice.pdf for rent receipts)
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// Landing images are public — they appear on the unauthenticated landing page
+app.use("/uploads/landing", express.static(path.join(__dirname, "uploads", "landing")));
+
+// All other uploads require a valid JWT (must come after the public route above)
+app.use("/uploads", authMiddleware, fileAccessMiddleware, express.static(path.join(__dirname, "uploads")));
 
 
 app.use("/auth", googleRoute);
@@ -91,7 +112,10 @@ app.use('/admin/landing-config', landingAdminRouter);
 
 // router.use('/user-management', userManagementRoutes);
 
-//write a running status endpoint at '/'
+app.get("/api/version", (req, res) => {
+  res.json({ version, env: process.env.NODE_ENV || "development" });
+});
+
 app.get("/", (req, res) => {
   res.send("Server is running");
 });

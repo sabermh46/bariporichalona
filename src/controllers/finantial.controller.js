@@ -50,7 +50,7 @@ class FinancialController {
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
-            error: "You do not have permission to view profit for this house",
+            error: "You do not have permission to view profit for this house||এই বাড়ির মুনাফা দেখার অনুমতি নেই",
           });
         }
       }
@@ -133,7 +133,7 @@ class FinancialController {
       console.error("Calculate monthly profit error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to calculate monthly profit",
+        error: "Failed to calculate monthly profit||মাসিক মুনাফা হিসাব করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -150,7 +150,7 @@ class FinancialController {
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
-            error: "You do not have permission to view profit report",
+            error: "You do not have permission to view profit report||মুনাফা প্রতিবেদন দেখার অনুমতি নেই",
           });
         }
       }
@@ -258,7 +258,7 @@ class FinancialController {
       console.error("Get profit report error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to generate profit report",
+        error: "Failed to generate profit report||মুনাফা প্রতিবেদন তৈরি করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -315,7 +315,7 @@ class FinancialController {
       if (!flat) {
         return res.status(404).json({
           success: false,
-          error: "Flat not found",
+          error: "Flat not found||ফ্ল্যাট খুঁজে পাওয়া যায়নি",
         });
       }
 
@@ -381,7 +381,7 @@ class FinancialController {
       if (!hasAccess) {
         return res.status(403).json({
           success: false,
-          error: "You do not have permission to record payments for this house",
+          error: "You do not have permission to record payments for this house||এই বাড়ির পেমেন্ট রেকর্ড করার অনুমতি নেই",
         });
       }
 
@@ -633,7 +633,7 @@ class FinancialController {
             await trx.rollback();
             return res.status(400).json({
               success: false,
-              error: "Cannot create a pending due: No renter assigned to this flat",
+              error: "Cannot create a pending due: No renter assigned to this flat||বকেয়া তৈরি করা যাচ্ছে না: এই ফ্ল্যাটে কোনো ভাড়াটে নেই",
             });
           }
 
@@ -677,7 +677,7 @@ class FinancialController {
           await trx.rollback();
           return res.status(500).json({
             success: false,
-            error: "Internal error: rent payment was not created or updated. Please contact support.",
+            error: "Internal error: rent payment was not created or updated. Please contact support.||অভ্যন্তরীণ ত্রুটি: ভাড়া পেমেন্ট তৈরি বা আপডেট হয়নি। সহায়তা দলের সাথে যোগাযোগ করুন।",
           });
         }
 
@@ -808,7 +808,7 @@ class FinancialController {
       });
       return res.status(500).json({
         success: false,
-        error: "Failed to process rent payment",
+        error: "Failed to process rent payment||ভাড়া পেমেন্ট প্রক্রিয়া করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -843,7 +843,7 @@ class FinancialController {
       if (!payment) {
         return res.status(404).json({
           success: false,
-          error: "Rent payment record not found",
+          error: "Rent payment record not found||ভাড়া পেমেন্টের রেকর্ড খুঁজে পাওয়া যায়নি",
         });
       }
 
@@ -868,7 +868,7 @@ class FinancialController {
       if (!hasAccess) {
         return res.status(403).json({
           success: false,
-          error: "You do not have permission to update payments for this house",
+          error: "You do not have permission to update payments for this house||এই বাড়ির পেমেন্ট আপডেট করার অনুমতি নেই",
         });
       }
 
@@ -910,7 +910,7 @@ class FinancialController {
 
       return res.json({
         success: true,
-        message: "Rent payment updated successfully",
+        message: "Rent payment updated successfully||ভাড়া পেমেন্ট সফলভাবে আপডেট হয়েছে",
         data: serializeBigInt(updatedPayment) // Ensure serializeBigInt is available or handle BigInts
       });
 
@@ -918,7 +918,7 @@ class FinancialController {
       console.error("Update rent payment error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to update rent payment",
+        error: "Failed to update rent payment||ভাড়া পেমেন্ট আপডেট করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -937,7 +937,7 @@ class FinancialController {
         .first();
 
       if (!payment) {
-        return res.status(404).json({ success: false, error: "Rent payment not found" });
+        return res.status(404).json({ success: false, error: "Rent payment not found||ভাড়া পেমেন্ট খুঁজে পাওয়া যায়নি" });
       }
 
       let hasAccess = false;
@@ -954,15 +954,15 @@ class FinancialController {
       }
 
       if (!hasAccess) {
-        return res.status(403).json({ success: false, error: "You do not have permission to delete this payment" });
+        return res.status(403).json({ success: false, error: "You do not have permission to delete this payment||এই পেমেন্ট মুছে ফেলার অনুমতি নেই" });
       }
 
       await db("rent_payment").where("id", id).delete();
 
-      return res.json({ success: true, message: "Payment deleted successfully" });
+      return res.json({ success: true, message: "Payment deleted successfully||পেমেন্ট সফলভাবে মুছে ফেলা হয়েছে" });
     } catch (error) {
       console.error("Delete rent payment error:", error);
-      return res.status(500).json({ success: false, error: "Failed to delete payment" });
+      return res.status(500).json({ success: false, error: "Failed to delete payment||পেমেন্ট মুছতে ব্যর্থ হয়েছে" });
     }
   }
 
@@ -981,7 +981,7 @@ class FinancialController {
       } else if (req.user.role.slug === "staff") {
         const hasPermission = await permissionService.hasPermission(userId, "payments.read");
         if (!hasPermission) {
-          return res.status(403).json({ success: false, error: "No permission" });
+          return res.status(403).json({ success: false, error: "No permission||অনুমতি নেই" });
         }
         houseIds = await db("house").pluck("id");
       } else if (req.user.role.slug === "caretaker") {
@@ -999,7 +999,7 @@ class FinancialController {
       if (houseIdParam) {
         const hId = parseInt(houseIdParam);
         if (!houseIds.includes(hId)) {
-          return res.status(403).json({ success: false, error: "Unauthorized house access" });
+          return res.status(403).json({ success: false, error: "Unauthorized house access||অননুমোদিত বাড়িতে প্রবেশ" });
         }
         houseIds = [hId];
       }
@@ -1047,7 +1047,7 @@ class FinancialController {
       console.error("Get refund due error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to get refund due list",
+        error: "Failed to get refund due list||ফেরত বকেয়ার তালিকা আনতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -1061,24 +1061,24 @@ class FinancialController {
       if (!renter_id || !flat_id || !house_id) {
         return res.status(400).json({
           success: false,
-          error: "renter_id, flat_id, and house_id are required",
+          error: "renter_id, flat_id, and house_id are required||renter_id, flat_id এবং house_id আবশ্যক",
         });
       }
 
       const house = await db("house").where("id", house_id).first();
       if (!house) {
-        return res.status(404).json({ success: false, error: "House not found" });
+        return res.status(404).json({ success: false, error: "House not found||বাড়ি খুঁজে পাওয়া যায়নি" });
       }
 
       if (req.user.role.slug !== "web_owner" && req.user.role.slug !== "staff") {
         if (house.ownerId !== userId) {
-          return res.status(403).json({ success: false, error: "Not your house" });
+          return res.status(403).json({ success: false, error: "Not your house||এটি আপনার বাড়ি নয়" });
         }
       }
 
       const renter = await db("renter").where("id", renter_id).first();
       if (!renter) {
-        return res.status(404).json({ success: false, error: "Renter not found" });
+        return res.status(404).json({ success: false, error: "Renter not found||ভাড়াটে খুঁজে পাওয়া যায়নি" });
       }
 
       let meta = {};
@@ -1098,7 +1098,7 @@ class FinancialController {
       if (index === -1) {
         return res.status(400).json({
           success: false,
-          error: "No unsettled refund due for this renter/flat/house",
+          error: "No unsettled refund due for this renter/flat/house||এই ভাড়াটে/ফ্ল্যাট/বাড়ির জন্য কোনো অপরিশোধিত ফেরত বকেয়া নেই",
         });
       }
 
@@ -1120,7 +1120,7 @@ class FinancialController {
 
       return res.json({
         success: true,
-        message: "Refund marked as settled",
+        message: "Refund marked as settled||ফেরত পরিশোধিত হিসেবে চিহ্নিত হয়েছে",
         data: {
           renter_id,
           flat_id,
@@ -1132,7 +1132,7 @@ class FinancialController {
       console.error("Settle refund error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to settle refund",
+        error: "Failed to settle refund||ফেরত পরিশোধ করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -1185,7 +1185,7 @@ class FinancialController {
       if (flats.length === 0) {
         return res.status(400).json({
           success: false,
-          error: "No flats with active renters found in this house",
+          error: "No flats with active renters found in this house||এই বাড়িতে কোনো সক্রিয় ভাড়াটেসহ ফ্ল্যাট পাওয়া যায়নি",
         });
       }
 
@@ -1260,7 +1260,7 @@ class FinancialController {
       console.error("Generate rent invoices error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to generate rent invoices",
+        error: "Failed to generate rent invoices||ভাড়ার ইনভয়েস তৈরি করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -1284,7 +1284,7 @@ class FinancialController {
       if (!house) {
         return res.status(404).json({
           success: false,
-          error: "House not found",
+          error: "House not found||বাড়ি খুঁজে পাওয়া যায়নি",
         });
       }
 
@@ -1295,7 +1295,7 @@ class FinancialController {
           return res.status(403).json({
             success: false,
             error:
-              "You do not have permission to record expenses for this house",
+              "You do not have permission to record expenses for this house||এই বাড়ির খরচ রেকর্ড করার অনুমতি নেই",
           });
         }
       }
@@ -1353,13 +1353,13 @@ class FinancialController {
           id: expenseId,
           ...expense,
         },
-        message: "Expense recorded successfully",
+        message: "Expense recorded successfully||খরচ সফলভাবে রেকর্ড হয়েছে",
       });
     } catch (error) {
       console.error("Record expense error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to record expense",
+        error: "Failed to record expense||খরচ রেকর্ড করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -1391,7 +1391,7 @@ class FinancialController {
       ) {
         return res.status(403).json({
           success: false,
-          error: "Only web owner can record app fee payments",
+          error: "Only web owner can record app fee payments||শুধুমাত্র ওয়েব মালিক অ্যাপ ফি পেমেন্ট রেকর্ড করতে পারবেন",
         });
       }
 
@@ -1399,7 +1399,7 @@ class FinancialController {
       if (!houseOwner) {
         return res.status(404).json({
           success: false,
-          error: "House owner not found",
+          error: "House owner not found||বাড়ির মালিক খুঁজে পাওয়া যায়নি",
         });
       }
 
@@ -1471,13 +1471,13 @@ class FinancialController {
           id: paymentId,
           ...feePayment,
         },
-        message: "App fee payment recorded successfully",
+        message: "App fee payment recorded successfully||অ্যাপ ফি পেমেন্ট সফলভাবে রেকর্ড হয়েছে",
       });
     } catch (error) {
       console.error("Record app fee payment error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to record app fee payment",
+        error: "Failed to record app fee payment||অ্যাপ ফি পেমেন্ট রেকর্ড করতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -1502,7 +1502,7 @@ class FinancialController {
         if (!hasPermission) {
           return res.status(403).json({
             success: false,
-            error: "You do not have permission to view financial reports",
+            error: "You do not have permission to view financial reports||আর্থিক প্রতিবেদন দেখার অনুমতি নেই",
           });
         }
       }
@@ -1556,7 +1556,7 @@ class FinancialController {
           if (!hasPerm) {
             return res.status(403).json({
               success: false,
-              error: "You do not have permission to view financial reports",
+              error: "You do not have permission to view financial reports||আর্থিক প্রতিবেদন দেখার অনুমতি নেই",
             });
           }
         } else if (userRole === "caretaker") {
@@ -1920,7 +1920,7 @@ class FinancialController {
       if (!flat_id || !houseId) {
         return res.status(400).json({
           success: false,
-          error: "flat_id and houseId are required",
+          error: "flat_id and houseId are required||flat_id এবং houseId আবশ্যক",
         });
       }
 
@@ -1948,7 +1948,7 @@ class FinancialController {
       if (!flat) {
         return res.status(404).json({
           success: false,
-          error: "Flat not found or does not belong to this house",
+          error: "Flat not found or does not belong to this house||ফ্ল্যাট খুঁজে পাওয়া যায়নি বা এই বাড়ির অন্তর্ভুক্ত নয়",
         });
       }
 
@@ -1958,7 +1958,7 @@ class FinancialController {
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
-            error: "You do not have permission to send reminders for this house",
+            error: "You do not have permission to send reminders for this house||এই বাড়ির জন্য রিমাইন্ডার পাঠানোর অনুমতি নেই",
           });
         }
       }
@@ -1967,7 +1967,7 @@ class FinancialController {
       if (!flat.renter_id) {
         return res.status(400).json({
           success: false,
-          error: "No renter assigned to this flat",
+          error: "No renter assigned to this flat||এই ফ্ল্যাটে কোনো ভাড়াটে নিয়োগ করা হয়নি",
         });
       }
 
@@ -1981,7 +1981,7 @@ class FinancialController {
       if (!pendingPayment) {
         return res.status(400).json({
           success: false,
-          error: "No pending rent payment for this flat",
+          error: "No pending rent payment for this flat||এই ফ্ল্যাটের কোনো মুলতুবি ভাড়া পেমেন্ট নেই",
         });
       }
 
@@ -1992,7 +1992,7 @@ class FinancialController {
       if (!emailToUse && !phoneToUse) {
         return res.status(400).json({
           success: false,
-          error: "Renter has no email or phone to send reminder to",
+          error: "Renter has no email or phone to send reminder to||ভাড়াটের কোনো ইমেইল বা ফোন নম্বর নেই",
         });
       }
 
@@ -2026,20 +2026,20 @@ class FinancialController {
               },
             ],
           },
-          message: "Rent reminder sent successfully",
+          message: "Rent reminder sent successfully||ভাড়ার রিমাইন্ডার সফলভাবে পাঠানো হয়েছে",
         });
       } catch (sendError) {
         console.error("Send rent reminder error:", sendError);
         return res.status(500).json({
           success: false,
-          error: "Failed to send rent reminder",
+          error: "Failed to send rent reminder||ভাড়ার রিমাইন্ডার পাঠাতে ব্যর্থ হয়েছে",
         });
       }
     } catch (error) {
       console.error("Send rent reminders error:", error);
       return res.status(500).json({
         success: false,
-        error: "Failed to send rent reminders",
+        error: "Failed to send rent reminders||ভাড়ার রিমাইন্ডার পাঠাতে ব্যর্থ হয়েছে",
       });
     }
   }
@@ -2104,7 +2104,7 @@ class FinancialController {
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
-            error: 'You do not have permission for this house',
+            error: 'You do not have permission for this house||এই বাড়ির জন্য অনুমতি নেই',
           });
         }
       }
@@ -2147,14 +2147,14 @@ class FinancialController {
 
       return res.json({
         success: true,
-        message: 'Payment receipt has been queued for delivery',
+        message: 'Payment receipt has been queued for delivery||পেমেন্টের রসিদ পাঠানোর জন্য সারিবদ্ধ হয়েছে',
         data: { withPdfAttachment: !!pdfBuffer },
       });
     } catch (error) {
       console.error('Resend payment receipt error:', error);
       return res.status(500).json({
         success: false,
-        error: 'Failed to resend payment receipt',
+        error: 'Failed to resend payment receipt||পেমেন্টের রসিদ পুনরায় পাঠাতে ব্যর্থ হয়েছে',
       });
     }
   }
@@ -2168,7 +2168,7 @@ class FinancialController {
       if (!flat_id) {
         return res.status(400).json({
           success: false,
-          error: 'flat_id is required',
+          error: 'flat_id is required||flat_id আবশ্যক',
         });
       }
 
@@ -2176,7 +2176,7 @@ class FinancialController {
       if (!flat) {
         return res.status(404).json({
           success: false,
-          error: 'Flat not found',
+          error: 'Flat not found||ফ্ল্যাট খুঁজে পাওয়া যায়নি',
         });
       }
 
@@ -2186,7 +2186,7 @@ class FinancialController {
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
-            error: 'You do not have permission for this flat',
+            error: 'You do not have permission for this flat||এই ফ্ল্যাটের জন্য অনুমতি নেই',
           });
         }
       }
@@ -2199,7 +2199,7 @@ class FinancialController {
         return res.json({
           success: true,
           data: [],
-          message: 'No rent payments found for this flat',
+          message: 'No rent payments found for this flat||এই ফ্ল্যাটের কোনো ভাড়া পেমেন্ট পাওয়া যায়নি',
         });
       }
 
@@ -2218,7 +2218,7 @@ class FinancialController {
       console.error('List payment receipts error:', error);
       return res.status(500).json({
         success: false,
-        error: 'Failed to list payment receipts',
+        error: 'Failed to list payment receipts||পেমেন্টের রসিদের তালিকা আনতে ব্যর্থ হয়েছে',
       });
     }
   }
@@ -2231,7 +2231,7 @@ class FinancialController {
       const userId = req.user.id;
 
       if (!pdfBase64) {
-        return res.status(400).json({ success: false, error: 'pdfBase64 is required' });
+        return res.status(400).json({ success: false, error: 'pdfBase64 is required||পিডিএফ ডেটা আবশ্যক' });
       }
 
       const payment = await db('rent_payment')
@@ -2259,16 +2259,16 @@ class FinancialController {
         .first();
 
       if (!payment) {
-        return res.status(404).json({ success: false, error: 'Payment not found' });
+        return res.status(404).json({ success: false, error: 'Payment not found||পেমেন্ট খুঁজে পাওয়া যায়নি' });
       }
       if (!payment.renter_email) {
-        return res.status(400).json({ success: false, error: 'Renter has no email on file' });
+        return res.status(400).json({ success: false, error: 'Renter has no email on file||ভাড়াটের কোনো ইমেইল নেই' });
       }
 
       if (req.user.role.slug !== 'web_owner') {
         const hasAccess = await this.checkHouseAccess(userId, payment.house_id);
         if (!hasAccess) {
-          return res.status(403).json({ success: false, error: 'No permission for this house' });
+          return res.status(403).json({ success: false, error: 'No permission for this house||এই বাড়ির জন্য অনুমতি নেই' });
         }
       }
 
@@ -2320,7 +2320,7 @@ class FinancialController {
       });
     } catch (error) {
       console.error('[sendRentReceiptPdf]', error);
-      return res.status(500).json({ success: false, error: 'Failed to send receipt' });
+      return res.status(500).json({ success: false, error: 'Failed to send receipt||রসিদ পাঠাতে ব্যর্থ হয়েছে' });
     }
   }
 

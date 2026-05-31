@@ -1,15 +1,16 @@
 // controllers/renterController.js
 const db = require('../config/knex');
 const { v4: uuidv4 } = require('uuid');
-const { 
-    moveToPermanentLocation, 
-    cleanupTempFiles, 
-    getFileUrl, 
+const {
+    moveToPermanentLocation,
+    cleanupTempFiles,
+    getFileUrl,
     uploadMultipleMiddleware
 } = require('../utils/fileUpload');
 const path = require('path');
 const fs = require('fs');
 const { hasPermission } = require('../services/permission.service');
+const { parsePagination } = require('../utils/pagination');
 
 class RenterController {
 
@@ -73,14 +74,14 @@ class RenterController {
             const userRole = req.user.role?.slug;
             
             // 1. Basic Validation
-            if (!name) return res.status(400).json({ success: false, error: 'Name is required' });
+            if (!name) return res.status(400).json({ success: false, error: 'Name is required||নাম আবশ্যক' });
 
             // 2. DETERMINE THE OWNER FIRST (Crucial fix)
             // We must know who the renter belongs to before checking for existing email/phone
             let createdByUserId;
 
             if (userRole === 'web_owner') {
-                if (!houseOwnerId) return res.status(400).json({ success: false, error: 'houseOwnerId is required' });
+                if (!houseOwnerId) return res.status(400).json({ success: false, error: 'houseOwnerId is required||বাড়ির মালিক আইডি আবশ্যক' });
                 
                 // Fix the subquery issue here
                 const houseOwner = await db('user')
@@ -90,7 +91,7 @@ class RenterController {
                     })
                     .first();
                 
-                if (!houseOwner) return res.status(400).json({ success: false, error: 'Invalid house owner ID' });
+                if (!houseOwner) return res.status(400).json({ success: false, error: 'Invalid house owner ID||অবৈধ বাড়ির মালিক আইডি' });
                 createdByUserId = houseOwnerId;
             } 
             else if (userRole === 'house_owner') {
@@ -98,9 +99,9 @@ class RenterController {
             }
             else if (userRole === 'staff' || userRole === 'caretaker') {
                 const hasCreatePermission = await hasPermission(userId, 'renters.create');
-                if (!hasCreatePermission) return res.status(403).json({ success: false, error: 'Permission denied' });
+                if (!hasCreatePermission) return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
                 
-                if (!houseOwnerId) return res.status(400).json({ success: false, error: 'houseOwnerId required' });
+                if (!houseOwnerId) return res.status(400).json({ success: false, error: 'houseOwnerId required||বাড়ির মালিক আইডি আবশ্যক' });
                 
                 const hOId = parseInt(houseOwnerId, 10);
                 
@@ -108,18 +109,18 @@ class RenterController {
                     const accessibleOwners = await this.getAccessibleHouseOwners(userId);
                     // Ensure accessibleOwners is an array of IDs
                     if (!accessibleOwners.includes(hOId)) {
-                        return res.status(403).json({ success: false, error: 'No access to this house owner' });
+                        return res.status(403).json({ success: false, error: 'No access to this house owner||এই বাড়ির মালিকের অ্যাক্সেস নেই' });
                     }
                 }
                 createdByUserId = hOId;
             } else {
-                return res.status(403).json({ success: false, error: 'Unauthorized role' });
+                return res.status(403).json({ success: false, error: 'Unauthorized role||অননুমোদিত ভূমিকা' });
             }
 
             if (phone && alternativePhone && String(phone).trim() === String(alternativePhone).trim()) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Primary phone and alternative phone cannot be the same'
+                    error: 'Primary phone and alternative phone cannot be the same||প্রাথমিক ও বিকল্প ফোন নম্বর একই হতে পারবে না'
                 });
             }
 
@@ -131,7 +132,7 @@ class RenterController {
                 if (phoneInAlt) {
                     return res.status(400).json({
                         success: false,
-                        error: 'This phone number is already in use as an alternative contact'
+                        error: 'This phone number is already in use as an alternative contact||এই ফোন নম্বরটি ইতিমধ্যে বিকল্প যোগাযোগ হিসেবে ব্যবহৃত'
                     });
                 }
             }
@@ -141,14 +142,14 @@ class RenterController {
                 const existingEmail = await db('renter')
                     .where({ createdBy: createdByUserId, email: email })
                     .first();
-                if (existingEmail) return res.status(400).json({ success: false, error: 'Email already exists for this owner' });
+                if (existingEmail) return res.status(400).json({ success: false, error: 'Email already exists for this owner||এই মালিকের জন্য ইমেইল ইতিমধ্যে নিবন্ধিত' });
             }
 
             if (phone) {
                 const existingPhone = await db('renter')
                     .where({ createdBy: createdByUserId, phone: phone })
                     .first();
-                if (existingPhone) return res.status(400).json({ success: false, error: 'Phone already exists for this owner' });
+                if (existingPhone) return res.status(400).json({ success: false, error: 'Phone already exists for this owner||এই মালিকের জন্য ফোন নম্বর ইতিমধ্যে নিবন্ধিত' });
             }
             if (nid) {
                 const existingNid = await db('renter')
@@ -158,7 +159,7 @@ class RenterController {
                 if (existingNid) {
                     return res.status(400).json({
                         success: false,
-                        error: 'This National ID (NID) is already registered under this house owner'
+                        error: 'This National ID (NID) is already registered under this house owner||এই জাতীয় পরিচয়পত্র (NID) ইতিমধ্যে নিবন্ধিত'
                     });
                 }
             }
@@ -247,7 +248,7 @@ class RenterController {
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             const permissions = req.user?.permissions || [];
-            const offset = (page - 1) * limit;
+            const { page: pageNum, limit: limitNum, offset } = parsePagination(page, limit, 20);
             
             // Start building query
             let query = db('renter')
@@ -264,17 +265,12 @@ class RenterController {
             } 
             if(userRole === 'staff') {
                 const hasPerm = permissions.some(perm => perm === 'renters.view');
-                if (hasPerm) {
+                if (!hasPerm) {
                     return res.status(403).json({
                         success: false,
-                        error: 'You do not have permission to view renters',
+                        error: 'You do not have permission to view renters||ভাড়াটে দেখার অনুমতি নেই',
                         data: [],
-                        meta: {
-                            page: parseInt(page),
-                            limit: parseInt(limit),
-                            total: 0,
-                            totalPages: 0
-                        }
+                        meta: { page: 1, limit: 20, total: 0, totalPages: 0 }
                     })
                 }
             }
@@ -287,7 +283,7 @@ class RenterController {
                 if (!hasViewPermission) { // fix condition - should be !hasViewPermission
                     return res.status(403).json({
                         success: false,
-                        error: 'You do not have permission to view renters'
+                        error: 'You do not have permission to view renters||ভাড়াটে দেখার অনুমতি নেই'
                     });
                 }
                 
@@ -319,7 +315,7 @@ class RenterController {
             // Filter by house owner (for web owner and staff with permission)
             if (houseOwnerId) {
                 if (userRole === 'web_owner' || 
-                    (userRole === 'staff' && await hasPermission(userId, 'renter.view_all'))) {
+                    (userRole === 'staff' && await hasPermission(userId, 'renters.view'))) {
                     query.andWhere('renter.createdBy', houseOwnerId);
                 }
             }
@@ -341,40 +337,45 @@ class RenterController {
             
             // Get paginated results
             const renters = await query
-                .limit(limit)
+                .limit(limitNum)
                 .offset(offset)
                 .orderBy('renter.createdAt', 'desc');
             
-            // For each renter, get associated flats
-            const rentersWithFlats = await Promise.all(
-                renters.map(async (renter) => {
-                    const flats = await db('flat')
-                        .join('house', 'flat.house_id', 'house.id')
-                        .where('flat.renter_id', renter.id)
-                        .select(
-                            'flat.id',
-                            'flat.number',
-                            'flat.name as flatName',
-                            'house.name as houseName',
-                            'house.id as houseId'
-                        );
-                    
-                    return {
-                        ...renter,
-                        flats,
-                        flatCount: flats.length
-                    };
-                })
-            );
+            // Fetch all flats for all renters in a single query instead of one per renter
+            const renterIds = renters.map(r => r.id);
+            const allFlats = renterIds.length > 0
+                ? await db('flat')
+                    .join('house', 'flat.house_id', 'house.id')
+                    .whereIn('flat.renter_id', renterIds)
+                    .select(
+                        'flat.id',
+                        'flat.renter_id',
+                        'flat.number',
+                        'flat.name as flatName',
+                        'house.name as houseName',
+                        'house.id as houseId'
+                    )
+                : [];
+
+            const flatsByRenter = allFlats.reduce((acc, flat) => {
+                if (!acc[flat.renter_id]) acc[flat.renter_id] = [];
+                acc[flat.renter_id].push(flat);
+                return acc;
+            }, {});
+
+            const rentersWithFlats = renters.map(renter => {
+                const flats = flatsByRenter[renter.id] || [];
+                return { ...renter, flats, flatCount: flats.length };
+            });
             
             return res.json({
                 success: true,
                 data: rentersWithFlats,
                 meta: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
+                    page: pageNum,
+                    limit: limitNum,
                     total,
-                    totalPages: Math.ceil(total / limit)
+                    totalPages: Math.ceil(total / limitNum)
                 }
             });
             
@@ -382,7 +383,7 @@ class RenterController {
             console.error('Get renters error:', error);
             return res.status(500).json({
                 success: false,
-                error: 'Failed to fetch renters'
+                error: 'Failed to fetch renters||ভাড়াটের তালিকা আনতে ব্যর্থ হয়েছে'
             });
         }
     }
@@ -575,7 +576,7 @@ class RenterController {
             if (!renter) {
                 return res.status(404).json({
                     success: false,
-                    error: 'Renter not found'
+                    error: 'Renter not found||ভাড়াটে খুঁজে পাওয়া যায়নি'
                 });
             }
             
@@ -584,7 +585,7 @@ class RenterController {
             if (!hasAccess) {
                 return res.status(403).json({
                     success: false,
-                    error: 'You do not have permission to view this renter'
+                    error: 'You do not have permission to view this renter||এই ভাড়াটে দেখার অনুমতি নেই'
                 });
             }
             
@@ -631,7 +632,7 @@ class RenterController {
             console.error('Get renter details error:', error);
             return res.status(500).json({
                 success: false,
-                error: 'Failed to fetch renter details'
+                error: 'Failed to fetch renter details||ভাড়াটের বিবরণ আনতে ব্যর্থ হয়েছে'
             });
         }
     }
@@ -654,16 +655,16 @@ class RenterController {
             if (!renter) {
                 return res.status(404).json({
                     success: false,
-                    error: 'Renter not found'
+                    error: 'Renter not found||ভাড়াটে খুঁজে পাওয়া যায়নি'
                 });
             }
             
             // Check access permission
-            const hasAccess = await this.checkRenterAccess(userId, userRole, renter);
+            const hasAccess = await this.checkRenterAccess(userId, userRole, renter, 'renters.edit');
             if (!hasAccess) {
                 return res.status(403).json({
                     success: false,
-                    error: 'You do not have permission to update this renter'
+                    error: 'You do not have permission to update this renter||এই ভাড়াটে আপডেট করার অনুমতি নেই'
                 });
             }
             
@@ -674,7 +675,7 @@ class RenterController {
             if (phone && alternativePhone && phone === alternativePhone) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Phone and alternative phone cannot be the same'
+                    error: 'Phone and alternative phone cannot be the same||ফোন এবং বিকল্প ফোন একই হতে পারবে না'
                 });
             }
             
@@ -684,7 +685,7 @@ class RenterController {
                 if (!emailRegex.test(updates.email)) {
                     return res.status(400).json({
                         success: false,
-                        error: 'Invalid email format'
+                        error: 'Invalid email format||ইমেইল ফরম্যাট সঠিক নয়'
                     });
                 }
             }
@@ -700,7 +701,7 @@ class RenterController {
                 if (existingEmail) {
                     return res.status(400).json({
                         success: false,
-                        error: 'A renter with this email already exists for this house owner'
+                        error: 'A renter with this email already exists for this house owner||এই ইমেইলে একজন ভাড়াটে ইতিমধ্যে নিবন্ধিত'
                     });
                 }
             }
@@ -715,7 +716,7 @@ class RenterController {
                 if (existingPhone) {
                     return res.status(400).json({
                         success: false,
-                        error: 'A renter with this phone already exists for this house owner'
+                        error: 'A renter with this phone already exists for this house owner||এই ফোন নম্বরে একজন ভাড়াটে ইতিমধ্যে নিবন্ধিত'
                     });
                 }
             }
@@ -816,7 +817,7 @@ class RenterController {
                 return res.json({
                     success: true,
                     data: updatedRenter,
-                    message: 'Renter updated successfully'
+                    message: 'Renter updated successfully||ভাড়াটে সফলভাবে আপডেট হয়েছে'
                 });
                 
             } catch (error) {
@@ -830,7 +831,7 @@ class RenterController {
             cleanupTempFiles(tempFiles);
             return res.status(500).json({
                 success: false,
-                error: 'Failed to update renter'
+                error: 'Failed to update renter||ভাড়াটে আপডেট করতে ব্যর্থ হয়েছে'
             });
         }
     }
@@ -847,16 +848,16 @@ class RenterController {
             if (!['web_owner', 'staff'].includes(userRole)) {
                 return res.status(403).json({
                     success: false,
-                    error: 'Permission denied'
+                    error: 'Permission denied||অনুমতি নেই'
                 });
             }
             
             if (userRole === 'staff') {
-                const hasPerm = await hasPermission(userId, 'renters.view_all');
+                const hasPerm = await hasPermission(userId, 'renters.view');
                 if (!hasPerm) {
                     return res.status(403).json({
                         success: false,
-                        error: 'Permission denied'
+                        error: 'Permission denied||অনুমতি নেই'
                     });
                 }
             }
@@ -864,7 +865,7 @@ class RenterController {
             if (!email && !phone && !nid) {
                 return res.status(400).json({
                     success: false,
-                    error: 'At least one search parameter is required'
+                    error: 'At least one search parameter is required||অন্তত একটি অনুসন্ধান প্যারামিটার আবশ্যক'
                 });
             }
             
@@ -927,7 +928,7 @@ class RenterController {
             console.error('Find duplicate renters error:', error);
             return res.status(500).json({
                 success: false,
-                error: 'Failed to search renters'
+                error: 'Failed to search renters||ভাড়াটে খুঁজতে ব্যর্থ হয়েছে'
             });
         }
     }
@@ -959,16 +960,16 @@ class RenterController {
             if (!renter) {
                 return res.status(404).json({
                     success: false,
-                    error: 'Renter not found'
+                    error: 'Renter not found||ভাড়াটে খুঁজে পাওয়া যায়নি'
                 });
             }
             
             // Check access permission
-            const hasAccess = await this.checkRenterAccess(userId, userRole, renter);
+            const hasAccess = await this.checkRenterAccess(userId, userRole, renter, 'renters.delete');
             if (!hasAccess) {
                 return res.status(403).json({
                     success: false,
-                    error: 'You do not have permission to delete this renter'
+                    error: 'You do not have permission to delete this renter||এই ভাড়াটে মুছে ফেলার অনুমতি নেই'
                 });
             }
             
@@ -981,7 +982,7 @@ class RenterController {
             if (activeAssignment) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Cannot delete renter. Renter is currently assigned to a flat.'
+                    error: 'Cannot delete renter. Renter is currently assigned to a flat.||ভাড়াটে মুছা যাবে না। ভাড়াটে বর্তমানে একটি ফ্ল্যাটে নিয়োজিত।'
                 });
             }
             
@@ -995,14 +996,14 @@ class RenterController {
             
             return res.json({
                 success: true,
-                message: 'Renter deleted successfully'
+                message: 'Renter deleted successfully||ভাড়াটে সফলভাবে মুছে ফেলা হয়েছে'
             });
             
         } catch (error) {
             console.error('Delete renter error:', error);
             return res.status(500).json({
                 success: false,
-                error: 'Failed to delete renter'
+                error: 'Failed to delete renter||ভাড়াটে মুছতে ব্যর্থ হয়েছে'
             });
         }
     }
@@ -1038,7 +1039,7 @@ class RenterController {
             else {
                 return res.status(403).json({
                     success: false,
-                    error: 'You do not have permission to view renters'
+                    error: 'You do not have permission to view renters||ভাড়াটে দেখার অনুমতি নেই'
                 });
             }
             
@@ -1076,7 +1077,7 @@ class RenterController {
             console.error('Get available renters error:', error);
             return res.status(500).json({
                 success: false,
-                error: 'Failed to fetch available renters'
+                error: 'Failed to fetch available renters||উপলব্ধ ভাড়াটের তালিকা আনতে ব্যর্থ হয়েছে'
             });
         }
     }
@@ -1121,24 +1122,19 @@ class RenterController {
     }
     
     // Helper method to check renter access
-    async checkRenterAccess(userId, userRole, renter) {
+    async checkRenterAccess(userId, userRole, renter, permissionKey = 'renters.view') {
         if (userRole === 'web_owner') {
             return true;
         }
-        
+
         if (userRole === 'house_owner') {
             return renter.createdBy === userId;
         }
-        
-        if (userRole === 'staff' || userRole === 'caretaker') {
-            // Check if staff has access to the house owner who created this renter
-            const hasPerm = await hasPermission(userId, 'renters.view');
-            if (!hasPerm) {
-                return false;
-            }
-            return hasPerm;
+
+        if (userRole === 'staff') {
+            return hasPermission(userId, permissionKey);
         }
-        
+
         return false;
     }
 }

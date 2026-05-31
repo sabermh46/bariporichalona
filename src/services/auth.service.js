@@ -1212,8 +1212,10 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
     const { sendAutoWelcomeNotification } = require("../utils/autoTestNotification");
 
     if (user.role_slug === "web_owner") {
-      setTimeout(async () => {
-        await sendAutoWelcomeNotification(user.id, user.role_slug);
+      setTimeout(() => {
+        sendAutoWelcomeNotification(user.id, user.role_slug).catch(err =>
+          console.error("Auto welcome notification failed:", err)
+        );
       }, 3000);
     }
 
@@ -1265,20 +1267,18 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
   }
 
   async refreshToken(req, res) {
+    // Accept token from HttpOnly cookie (preferred) or body (legacy fallback)
+    const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+
+    if (!refreshToken) {
+      return res.status(401).json({ message: "Refresh token missing" });
+    }
+
     try {
-      const { refreshToken } = req.body;
-
-      if (!refreshToken) {
-        return res.status(401).json({ message: "Refresh token missing" });
-      }
-
       const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH);
       const tokens = await createTokens(decoded.userId);
 
-      return res.json({
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-      });
+      return tokens;
     } catch (error) {
       return res
         .status(401)

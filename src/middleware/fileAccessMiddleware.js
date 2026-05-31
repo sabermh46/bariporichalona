@@ -5,19 +5,20 @@ const fs = require('fs');
 
 const fileAccessMiddleware = async (req, res, next) => {
     try {
-        const filePath = req.path; // e.g., /uploads/renters/1/nid_front.jpg
-        
+        // req.path is the portion AFTER the mount point (/uploads), e.g. /renters/1/nid_front.jpg
+        const filePath = req.path;
+
         // Extract folder and file info
-        const parts = filePath.split('/');
-        if (parts.length < 4 || parts[1] !== 'uploads') {
+        const parts = filePath.split('/').filter(Boolean); // remove empty strings from leading slash
+        if (parts.length < 2) {
             return res.status(404).json({ error: 'File not found' });
         }
-        
-        const category = parts[2]; // renters
-        const identifier = parts[3]; // renter id
-        
+
+        const category = parts[0]; // renters, pdfs, houses, etc.
+        const identifier = parts[1]; // renter id, pdf id, etc.
+
         // Check if file exists
-        const fullPath = path.join(process.cwd(), 'uploads', ...parts.slice(2));
+        const fullPath = path.join(process.cwd(), 'uploads', ...parts);
         if (!fs.existsSync(fullPath)) {
             return res.status(404).json({ error: 'File not found' });
         }
@@ -105,9 +106,76 @@ const fileAccessMiddleware = async (req, res, next) => {
             }
         }
         
-        // For other categories, add logic as needed
+        // PDF invoices – accessible to the house owner, their staff, or the renter themselves
+        if (category === 'pdfs') {
+            const userId = req.user?.id;
+            const userRole = req.user?.role?.slug;
+            if (!userId) return res.status(401).json({ error: 'Unauthorised' });
+            if (userRole === 'web_owner' || userRole === 'house_owner') return next();
+
+            // identifier is the rent_payment id
+            const payment = await db('rent_payment')
+                .where('rent_payment.id', identifier)
+                .leftJoin('flat', 'rent_payment.flat_id', 'flat.id')
+                .leftJoin('house', 'flat.house_id', 'house.id')
+                .select('house.ownerId', 'flat.renter_id')
+                .first();
+
+            if (!payment) return res.status(404).json({ error: 'File not found' });
+            if (payment.ownerId === userId || payment.renter_id === userId) return next();
+
+            // Staff/caretaker assigned to that house
+            const flat = await db('flat').where('renter_id', payment.renter_id).select('house_id').first();
+            if (flat) {
+                const assigned = await db('caretakerassignment')
+                    .where('house_id', flat.house_id)
+                    .andWhere('caretaker_id', userId)
+                    .andWhere('expires_at', '>', new Date())
+                    .first();
+                if (assigned) return next();
+            }
+
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        // House / flat images – anyone authenticated can view (images are not PII)
+        if (category === 'houses' || category === 'flats') {
+            return next();
+        }
+
+        // Avatar / profile pictures — access rules vary by target user's role
+        if (category === 'avatars') {
+            const targetUserId = parseInt(identifier, 10);
+            if (!targetUserId) return res.status(404).json({ error: 'File not found' });
+
+            // Self can always view own avatar (compare as numbers — userId from JWT may be string)
+            if (parseInt(userId, 10) === targetUserId) return next();
+
+            // Look up target user's role
+            const targetUser = await db('user')
+                .join('role', 'user.roleId', 'role.id')
+                .where('user.id', targetUserId)
+                .select('role.slug as roleSlug')
+                .first();
+
+            if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+            const targetRole = targetUser.roleSlug;
+
+            if (targetRole === 'web_owner') {
+                // web_owner avatar: only viewable by self (handled above)
+                return res.status(403).json({ error: 'Access denied' });
+            }
+
+            // house_owner, caretaker, staff avatars: viewable by self (above), staff, web_owner
+            if (userRole === 'staff') return next();
+
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        // For any other categories, deny by default
         return res.status(403).json({ error: 'Access denied' });
-        
+
     } catch (error) {
         console.error('File access middleware error:', error);
         return res.status(500).json({ error: 'Internal server error' });

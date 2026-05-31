@@ -7,6 +7,16 @@ const permissionService = require("../services/permission.service");
 const userCache = new Map();
 const USER_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
+// Periodically evict expired entries so the Map never grows unbounded
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of userCache) {
+        if (now - value.timestamp >= USER_CACHE_TTL) {
+            userCache.delete(key);
+        }
+    }
+}, USER_CACHE_TTL);
+
 const authMiddleware = async (req, res, next) => {
     try {
         // Get token from Authorization header

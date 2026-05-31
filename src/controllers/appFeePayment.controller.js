@@ -900,11 +900,11 @@ class AppFeePaymentController {
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             if (!['web_owner', 'staff'].includes(userRole)) {
-                return res.status(403).json({ success: false, error: 'You do not have permission to view app fee email log' });
+                return res.status(403).json({ success: false, error: 'You do not have permission to view app fee email log||অ্যাপ ফি ইমেইল লগ দেখার অনুমতি নেই' });
             }
             if (userRole === 'staff') {
                 const hasPerm = await hasPermission(userId, 'app_fees.view');
-                if (!hasPerm) return res.status(403).json({ success: false, error: 'Permission denied' });
+                if (!hasPerm) return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
             }
             const offset = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10)));
             const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
@@ -925,7 +925,7 @@ class AppFeePaymentController {
             });
         } catch (error) {
             console.error('Get app fee email log error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to fetch email log' });
+            return res.status(500).json({ success: false, error: 'Failed to fetch email log||ইমেইল লগ আনতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -936,12 +936,12 @@ class AppFeePaymentController {
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             if (!['web_owner', 'staff', 'house_owner', 'caretaker'].includes(userRole)) {
-                return res.status(403).json({ success: false, error: 'Access denied' });
+                return res.status(403).json({ success: false, error: 'Access denied||প্রবেশ অনুমোদিত নয়' });
             }
             const payment = await db('app_fee_payment').where('id', row_id).whereNull('deleted_at').select('house_owner_id').first();
-            if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
+            if (!payment) return res.status(404).json({ success: false, error: 'Payment not found||পেমেন্ট খুঁজে পাওয়া যায়নি' });
             if (userRole === 'house_owner' && payment.house_owner_id !== userId) {
-                return res.status(403).json({ success: false, error: 'You can only view your own payment email log' });
+                return res.status(403).json({ success: false, error: 'You can only view your own payment email log||আপনি শুধুমাত্র নিজের পেমেন্টের ইমেইল লগ দেখতে পারবেন' });
             }
             if (userRole === 'caretaker') {
                 const accessible = await this.getAccessibleHouseOwners(userId);
@@ -949,7 +949,7 @@ class AppFeePaymentController {
             }
             if (userRole === 'staff') {
                 const hasPerm = await hasPermission(userId, 'app_fees.view');
-                if (!hasPerm) return res.status(403).json({ success: false, error: 'Permission denied' });
+                if (!hasPerm) return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
             }
             const rows = await db('emaillog')
                 .where('table_name', 'app_fee')
@@ -959,7 +959,7 @@ class AppFeePaymentController {
             return res.json({ success: true, data: serializeBigInt(rows) });
         } catch (error) {
             console.error('Get app fee email log by row_id error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to fetch email log' });
+            return res.status(500).json({ success: false, error: 'Failed to fetch email log||ইমেইল লগ আনতে ব্যর্থ হয়েছে' });
         }
     }
 
@@ -970,11 +970,11 @@ class AppFeePaymentController {
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             if (!['web_owner', 'staff'].includes(userRole)) {
-                return res.status(403).json({ success: false, error: 'You do not have permission to resend app fee emails' });
+                return res.status(403).json({ success: false, error: 'You do not have permission to resend app fee emails||অ্যাপ ফি ইমেইল পুনরায় পাঠানোর অনুমতি নেই' });
             }
             if (userRole === 'staff') {
                 const hasPerm = await hasPermission(userId, 'app_fees.verify');
-                if (!hasPerm) return res.status(403).json({ success: false, error: 'Permission denied' });
+                if (!hasPerm) return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
             }
             const payment = await db('app_fee_payment as afp')
                 .join('user as ho', 'afp.house_owner_id', 'ho.id')
@@ -1014,12 +1014,12 @@ class AppFeePaymentController {
                     });
                 }
             } else {
-                return res.status(400).json({ success: false, error: 'Cannot resend email for this payment status' });
+                return res.status(400).json({ success: false, error: 'Cannot resend email for this payment status||এই পেমেন্টের স্ট্যাটাসে ইমেইল পুনরায় পাঠানো যাবে না' });
             }
-            return res.json({ success: true, message: 'Email has been queued for delivery' });
+            return res.json({ success: true, message: 'Email has been queued for delivery||ইমেইল পাঠানোর জন্য সারিবদ্ধ হয়েছে' });
         } catch (error) {
             console.error('Resend app fee mail error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to resend email' });
+            return res.status(500).json({ success: false, error: 'Failed to resend email||ইমেইল পুনরায় পাঠাতে ব্যর্থ হয়েছে' });
         }
     }
 

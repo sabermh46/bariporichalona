@@ -3,12 +3,13 @@ const { getEmailWorkerPool } = require('../utils/emailWorkerPool');
 
 const MAX_RETRIES = 3;
 const CONCURRENT_SENDS = 2;
+const MAX_QUEUE_SIZE = 500; // prevent unbounded growth when SMTP is down
 
 class EmailService {
   constructor() {
     this.queue = [];
     this.processing = new Set();
-    this.stats = { queued: 0, sent: 0, failed: 0 };
+    this.stats = { queued: 0, sent: 0, failed: 0, dropped: 0 };
     this._jobId = 0;
   }
 
@@ -41,6 +42,11 @@ class EmailService {
    * attachments: optional array of { filename, content: Buffer } (content serialized as base64 for worker).
    */
   queueEmail(to, subject, html, text = null, metadata = {}, attachments = null) {
+    if (this.queue.length >= MAX_QUEUE_SIZE) {
+      this.stats.dropped++;
+      console.error(`Email queue full (${MAX_QUEUE_SIZE}). Dropping email to: ${to}`);
+      return { queued: false, dropped: true };
+    }
     const safeMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {};
     const job = this._createJob(to, subject, html, text, safeMetadata, attachments);
     this.queue.push(job);
@@ -107,6 +113,7 @@ class EmailService {
       processing: this.processing.size,
       sent: this.stats.sent,
       failed: this.stats.failed,
+      dropped: this.stats.dropped,
     };
   }
 

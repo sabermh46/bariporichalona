@@ -1,9 +1,11 @@
 const router = require("express").Router();
 const AuthController = require("../controllers/auth.controller");
 const authMiddleware = require("../middleware/auth.middleware");
-const roleMiddleware = require("../middleware/role.middleware")
+const roleMiddleware = require("../middleware/role.middleware");
+const { loginLimiter, passwordResetLimiter, registrationLimiter } = require("../middleware/rateLimiter");
+const { uploadSingleMiddleware } = require("../utils/fileUpload");
 
-router.post("/register", AuthController.register);
+router.post("/register", registrationLimiter, AuthController.register);
 router.post('/validate-token', AuthController.validateToken);
 router.get('/settings', AuthController.getSystemSettings);
 
@@ -59,7 +61,8 @@ router.put('/system-settings',
 );
 
 
-router.post("/login", AuthController.login);
+router.post("/login", loginLimiter, AuthController.login);
+router.post("/logout", AuthController.logout);
 router.post("/set-password", authMiddleware, AuthController.setPassword);
 router.post("/link-google", authMiddleware, AuthController.linkGoogleAccount);
 router.post("/check-link", AuthController.checkAccountLink); // indicating this line
@@ -67,11 +70,13 @@ router.post("/refresh", AuthController.refreshToken);
 router.get("/public-registration-status", AuthController.getPublicRegistrationStatus);
 
 // Password management routes
-router.post('/forgot-password', 
+router.post('/forgot-password',
+    passwordResetLimiter,
     AuthController.forgotPassword
 );
 
 router.post('/reset-password',
+    passwordResetLimiter,
     AuthController.resetPassword
 );
 
@@ -79,6 +84,12 @@ router.post('/reset-password',
 router.post('/change-password',
     authMiddleware,
     AuthController.changePassword
+);
+
+router.post('/profile/avatar',
+    authMiddleware,
+    uploadSingleMiddleware('avatar'),
+    AuthController.uploadAvatar
 );
 
 module.exports = router;

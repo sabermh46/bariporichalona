@@ -3,6 +3,10 @@ const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
 const db = require("../config/knex");
 const notificationController = require("./notification.controller");
+const path = require("path");
+const fs = require("fs");
+const { moveToPermanentLocation } = require("../utils/fileUpload");
+const { v4: uuidv4 } = require("uuid");
 
 class AuthController {
   // Public registration
@@ -37,10 +41,28 @@ class AuthController {
   async login(req, res) {
     try {
       const data = await AuthService.login(req.body);
-      res.json(serializeBigInt(data));
+      const { refreshToken, ...responseData } = data;
+
+      res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      });
+
+      res.json(serializeBigInt(responseData));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
+  };
+
+  async logout(req, res) {
+    res.clearCookie('refreshToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
+    res.json({ success: true });
   };
 
   async setPassword(req, res) {
@@ -113,7 +135,16 @@ class AuthController {
   async refreshToken(req, res) {
     try {
       const data = await AuthService.refreshToken(req, res);
-      res.json(serializeBigInt(data));
+      const { refreshToken, ...responseData } = data;
+
+      res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      res.json(serializeBigInt(responseData));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -373,7 +404,7 @@ class AuthController {
 
       // Check if user is web_owner
       if (req.user.role.slug !== 'web_owner') {
-        return res.status(403).json({ error: 'Only web owner can update system settings' });
+        return res.status(403).json({ error: 'Only web owner can update system settings||শুধুমাত্র ওয়েব মালিক সিস্টেম সেটিংস আপডেট করতে পারবেন' });
       }
 
       const existingSetting = await db('systemsetting')
@@ -491,6 +522,40 @@ class AuthController {
       res.json(serializeBigInt(formattedSessions));
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  }
+
+  async uploadAvatar(req, res) {
+    try {
+      const userId = req.user.id;
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: 'No file uploaded||কোনো ফাইল আপলোড হয়নি' });
+
+      const ext = path.extname(file.originalname).toLowerCase();
+      const filename = `${uuidv4()}${ext}`;
+      const relativePath = moveToPermanentLocation(file.path, `avatars/${userId}`, filename);
+      const avatarPath = `/uploads/${relativePath.replace(/\\/g, '/')}`;
+
+      const user = await db('user').where('id', userId).first();
+      let currentMetadata = {};
+      if (user.metadata) {
+        try { currentMetadata = JSON.parse(user.metadata); } catch (e) {}
+      }
+
+      // Delete old avatar file if one exists
+      if (currentMetadata.avatarPath) {
+        // avatarPath is like /uploads/avatars/{id}/file.jpg — strip leading slash for join
+        const stripped = currentMetadata.avatarPath.replace(/^\//, '');
+        const oldFilePath = path.join(process.cwd(), stripped);
+        if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
+      }
+
+      const updatedMetadata = { ...currentMetadata, avatarPath };
+      await db('user').where('id', userId).update({ metadata: JSON.stringify(updatedMetadata) });
+
+      res.json({ success: true, avatarPath });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   }
 }

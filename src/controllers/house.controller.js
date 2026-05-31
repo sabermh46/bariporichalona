@@ -4,6 +4,7 @@ const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
 const CaretakerPermissionService = require("../services/CaretakerPermission.service");
 const notificationController = require("./notification.controller");
+const { parsePagination } = require("../utils/pagination");
 
 class HouseController {
 
@@ -433,78 +434,34 @@ class HouseController {
           active: false,
         };
       } else if (currentUser.role.slug === "staff") {
-        // Staff has two ways to update:
-        // 1. With house.update.any permission (can update any house, but only address)
-        // 2. With houses.edit permission AND hierarchy check (can update full fields for managed houses)
-
-        const hasUpdateAnyPermission = await PermissionService.hasPermission(
+        // Staff needs houses.edit permission AND must manage the house owner
+        canUpdate = await PermissionService.hasPermission(
           currentUser.id,
-          "house.update.any"
+          "houses.edit"
         );
 
-        if (hasUpdateAnyPermission) {
-          canUpdate = true;
-          allowedFields = {
-            name: false,
-            address: true,
-            flatCount: false,
-            metadata: false,
-            active: false,
-          };
-        } else if(currentUser.role.slug === "caretaker") {
-          // Caretaker can only update metadata if they have permission for this house
-          const hasPermission = await CaretakerPermissionService.hasCaretakerPermission(
+        if (canUpdate) {
+          const isManaged = await this.checkUserHierarchy(
             currentUser.id,
-            house.id,
-            'houses.edit'
+            house.ownerId
           );
-
-          if(!hasPermission) {
+          if (!isManaged) {
             return res.status(403).json({
               success: false,
-              error: "You do not have permission to update this house",
+              error: "You can only update houses of owners under your management",
             });
           }
-
           allowedFields = {
-            name: false,
-            address: false,
-            flatCount: false,
-            metadata: true, // Only metadata
+            name: true,
+            address: true,
+            flatCount: true,
+            metadata: true,
             active: false,
           };
-        } else {
-          // Check regular houses.edit permission
-          canUpdate = await PermissionService.hasPermission(
-            currentUser.id,
-            "houses.edit"
-          );
-
-          if (canUpdate) {
-            // Check if staff manages this house owner
-            const isManaged = await this.checkUserHierarchy(
-              currentUser.id,
-              house.ownerId
-            );
-            if (!isManaged) {
-              return res.status(403).json({
-                success: false,
-                error:
-                  "You can only update houses of owners under your management",
-              });
-            }
-            allowedFields = {
-                name: true,
-              address: true,
-              flatCount: true,
-              metadata: true,
-              active: false,
-            };
-          }
         }
       } else if(currentUser.role.slug === "caretaker") {
         // Caretaker can only update metadata if they have permission for this house
-        canUpdate = CaretakerPermissionService.hasCaretakerPermission(
+        canUpdate = await CaretakerPermissionService.hasCaretakerPermission(
           currentUser.id,
           house.id,
           'houses.edit'
@@ -647,12 +604,24 @@ class HouseController {
         });
       }
 
-      // Only web_owner can delete houses
-      if (req.user.role.slug !== "web_owner") {
-        return res.status(403).json({
-          success: false,
-          error: "Only web owner can delete houses",
-        });
+      // web_owner can always delete; staff needs houses.delete permission and must manage the house owner
+      const role = req.user.role.slug;
+      if (role !== "web_owner") {
+        if (role === "staff") {
+          const hasPerm = await PermissionService.hasPermission(req.user.id, "houses.delete");
+          if (!hasPerm) {
+            return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
+          }
+          const isManaged = await this.checkUserHierarchy(req.user.id, house.ownerId);
+          if (!isManaged) {
+            return res.status(403).json({
+              success: false,
+              error: "You can only delete houses of owners under your management||আপনি শুধুমাত্র আপনার অধীনস্থ মালিকদের বাড়ি মুছতে পারবেন",
+            });
+          }
+        } else {
+          return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
+        }
       }
 
       // Check if house has flats
@@ -728,9 +697,7 @@ class HouseController {
         withRenters = "true",
       } = req.query;
 
-      const pageNum = parseInt(page);
-      const limitNum = parseInt(limit);
-      const offset = (pageNum - 1) * limitNum;
+      const { page: pageNum, limit: limitNum, offset } = parsePagination(page, limit);
 
       const currentUser = req.user;
       let query = db("house as h");

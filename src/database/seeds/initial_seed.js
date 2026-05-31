@@ -94,24 +94,27 @@ async function main() {
           { key: "houses.create", description: "Create new houses" },
           { key: "houses.view", description: "View house list" },
           { key: "houses.view.own", description: "View own houses only" },
+          { key: "houses.view.assigned", description: "View houses assigned to caretaker" },
           { key: "houses.edit", description: "Edit any house" },
           { key: "houses.edit.own", description: "Edit own houses only" },
           { key: "houses.delete", description: "Delete houses" },
         ],
-        
+
         // Flat Management Permissions
         flat_management: [
           { key: "flats.create", description: "Create new flats" },
           { key: "flats.view", description: "View flat list" },
+          { key: "flats.view.assigned", description: "View flats in assigned houses (caretaker)" },
           { key: "flats.edit", description: "Edit flats" },
           { key: "flats.delete", description: "Delete flats" },
           { key: "flats.assign", description: "Assign flats to renters" },
         ],
-        
+
         // Renter Management Permissions
         renter_management: [
           { key: "renters.create", description: "Create new renters" },
           { key: "renters.view", description: "View renter list" },
+          { key: "renters.view.assigned", description: "View renters in assigned houses (caretaker)" },
           { key: "renters.edit", description: "Edit renter information" },
           { key: "renters.delete", description: "Delete renters" },
         ],
@@ -255,9 +258,9 @@ async function main() {
 
       // Caretaker base permissions
       const caretakerPermissions = [
-        "houses.view.assigned",
-        "flats.view.assigned",
-        "renters.view.assigned",
+        "houses.view.assigned",   // now defined in house_management
+        "flats.view.assigned",    // now defined in flat_management
+        "renters.view.assigned",  // now defined in renter_management
         "maintenance.create",
         "maintenance.view.assigned",
         "maintenance.resolve",

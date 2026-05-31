@@ -5,6 +5,7 @@ const { hasPermission } = require("../services/permission.service");
 const { getAccessibleHouseOwners } = require("./common/index");
 const CaretakerPermissionService = require("../services/CaretakerPermission.service");
 const notify = require("../services/inAppNotification.service");
+const { parsePagination } = require("../utils/pagination");
 
 class FlatController {
   constructor() {
@@ -253,9 +254,9 @@ class FlatController {
   async getFlats(req, res) {
     try {
       const { houseId: house_id } = req.params;
-      const { status, search, page = 1, limit = 20 } = req.query;
+      const { status, search, page: rawPage = 1, limit: rawLimit = 20 } = req.query;
       const userId = req.user.id;
-      const offset = (page - 1) * limit;
+      const { page, limit, offset } = parsePagination(rawPage, rawLimit, 20);
 
       if (req.user.role.slug === "caretaker") {
         // Check if caretaker has access to the specified house
@@ -363,8 +364,8 @@ class FlatController {
         success: true,
         data: flats,
         meta: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page,
+          limit,
           total,
           totalPages: Math.ceil(total / limit),
           stats,
@@ -511,13 +512,21 @@ class FlatController {
       }
 
       // Check permission
-      if (req.user.role.slug !== "web_owner") {
-        const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
-        if (!hasAccess) {
-          return res.status(403).json({
-            success: false,
-            error: "You do not have permission to update this flat",
-          });
+      const role = req.user.role.slug;
+      if (role !== "web_owner") {
+        if (role === "staff") {
+          const hasPerm = await hasPermission(userId, "flats.edit");
+          if (!hasPerm) {
+            return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
+          }
+        } else {
+          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+          if (!hasAccess) {
+            return res.status(403).json({
+              success: false,
+              error: "You do not have permission to update this flat",
+            });
+          }
         }
       }
 
@@ -577,14 +586,23 @@ class FlatController {
         }
 
         // Check permission
-        if (req.user.role.slug !== "web_owner") {
-          const ownerId = flat.ownerId || flat.owner_id;
-          if (ownerId !== userId) {
-            await trx.rollback();
-            return res.status(403).json({
-              success: false,
-              error: "Only the house owner can delete flats",
-            });
+        const role = req.user.role.slug;
+        if (role !== "web_owner") {
+          if (role === "staff") {
+            const hasPerm = await hasPermission(userId, "flats.delete");
+            if (!hasPerm) {
+              await trx.rollback();
+              return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
+            }
+          } else {
+            const ownerId = flat.ownerId || flat.owner_id;
+            if (ownerId !== userId) {
+              await trx.rollback();
+              return res.status(403).json({
+                success: false,
+                error: "Only the house owner can delete flats",
+              });
+            }
           }
         }
 
@@ -683,13 +701,21 @@ class FlatController {
         }
 
         // Check permission
-        if (req.user.role.slug !== 'web_owner') {
-          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
-          if (!hasAccess) {
-            return res.status(403).json({
-              success: false,
-              error: 'You do not have permission to assign renter',
-            });
+        const role = req.user.role.slug;
+        if (role !== 'web_owner') {
+          if (role === 'staff') {
+            const hasPerm = await hasPermission(userId, 'flats.assign');
+            if (!hasPerm) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
+            }
+          } else {
+            const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+            if (!hasAccess) {
+              return res.status(403).json({
+                success: false,
+                error: 'You do not have permission to assign renter',
+              });
+            }
           }
         }
 

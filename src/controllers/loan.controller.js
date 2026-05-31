@@ -45,13 +45,13 @@ class LoanController {
             // Verify house ownership/access (basic check, middleware handles auth)
             const house = await db('house').where('id', house_id).first();
             if (!house) {
-                return res.status(404).json({ success: false, error: "House not found" });
+                return res.status(404).json({ success: false, error: "House not found||বাড়ি খুঁজে পাওয়া যায়নি" });
             }
             
             // Check permission: Only owner or admin can add loan
             // Assuming authMiddleware populates req.user
             if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
-                 return res.status(403).json({ success: false, error: "Unauthorized access to this house" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access to this house||এই বাড়িতে অননুমোদিত প্রবেশ" });
             }
 
             const loanData = {
@@ -99,11 +99,11 @@ class LoanController {
             // Access check
             const house = await db('house').where('id', houseId).first();
             if (!house) {
-                return res.status(404).json({ success: false, error: "House not found" });
+                return res.status(404).json({ success: false, error: "House not found||বাড়ি খুঁজে পাওয়া যায়নি" });
             }
             
             if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
-                 return res.status(403).json({ success: false, error: "Unauthorized access" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access||অননুমোদিত প্রবেশ" });
             }
 
             const loans = await db('house_loan')
@@ -136,7 +136,7 @@ class LoanController {
 
         } catch (error) {
             console.error("Get loans error:", error);
-            res.status(500).json({ success: false, error: "Failed to fetch loans" });
+            res.status(500).json({ success: false, error: "Failed to fetch loans||ঋণের তালিকা আনতে ব্যর্থ হয়েছে" });
         }
     }
 
@@ -150,13 +150,13 @@ class LoanController {
             const loan = await db('house_loan').where('id', loanId).first();
             
             if (!loan) {
-                return res.status(404).json({ success: false, error: "Loan not found" });
+                return res.status(404).json({ success: false, error: "Loan not found||ঋণ খুঁজে পাওয়া যায়নি" });
             }
 
             // Verify access to the house associated with this loan
             const house = await db('house').where('id', loan.house_id).first();
              if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
-                 return res.status(403).json({ success: false, error: "Unauthorized access" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access||অননুমোদিত প্রবেশ" });
             }
 
             // Fetch payments
@@ -174,7 +174,7 @@ class LoanController {
 
         } catch (error) {
             console.error("Get loan details error:", error);
-            res.status(500).json({ success: false, error: "Failed to fetch loan details" });
+            res.status(500).json({ success: false, error: "Failed to fetch loan details||ঋণের বিবরণ আনতে ব্যর্থ হয়েছে" });
         }
     }
 
@@ -196,11 +196,11 @@ class LoanController {
             } = req.body;
 
             const loan = await db('house_loan').where('id', loanId).first();
-            if (!loan) return res.status(404).json({ success: false, error: "Loan not found" });
+            if (!loan) return res.status(404).json({ success: false, error: "Loan not found||ঋণ খুঁজে পাওয়া যায়নি" });
 
              const house = await db('house').where('id', loan.house_id).first();
              if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
-                 return res.status(403).json({ success: false, error: "Unauthorized access" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access||অননুমোদিত প্রবেশ" });
             }
 
             const updateData = {};
@@ -227,7 +227,7 @@ class LoanController {
 
         } catch (error) {
             console.error("Update loan error:", error);
-            res.status(500).json({ success: false, error: "Failed to update loan" });
+            res.status(500).json({ success: false, error: "Failed to update loan||ঋণ আপডেট করতে ব্যর্থ হয়েছে" });
         }
     }
 
@@ -239,11 +239,11 @@ class LoanController {
             const { loanId } = req.params;
             
             const loan = await db('house_loan').where('id', loanId).first();
-            if (!loan) return res.status(404).json({ success: false, error: "Loan not found" });
+            if (!loan) return res.status(404).json({ success: false, error: "Loan not found||ঋণ খুঁজে পাওয়া যায়নি" });
 
             const house = await db('house').where('id', loan.house_id).first();
              if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
-                 return res.status(403).json({ success: false, error: "Unauthorized access" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access||অননুমোদিত প্রবেশ" });
             }
 
             await db('house_loan').where('id', loanId).del();
@@ -256,7 +256,7 @@ class LoanController {
 
         } catch (error) {
             console.error("Delete loan error:", error);
-            res.status(500).json({ success: false, error: "Failed to delete loan" });
+            res.status(500).json({ success: false, error: "Failed to delete loan||ঋণ মুছতে ব্যর্থ হয়েছে" });
         }
     }
 
@@ -270,19 +270,19 @@ class LoanController {
             const { amount, payment_date, transaction_id, notes } = req.body;
 
             if (!amount || !payment_date) {
-                return res.status(400).json({ success: false, error: "Amount and payment_date are required" });
+                return res.status(400).json({ success: false, error: "Amount and payment_date are required||পরিমাণ এবং পেমেন্টের তারিখ আবশ্যক" });
             }
 
             const loan = await trx('house_loan').where('id', loanId).first();
             if (!loan) {
                 await trx.rollback();
-                return res.status(404).json({ success: false, error: "Loan not found" });
+                return res.status(404).json({ success: false, error: "Loan not found||ঋণ খুঁজে পাওয়া যায়নি" });
             }
 
             const house = await trx('house').where('id', loan.house_id).first();
              if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
                  await trx.rollback();
-                 return res.status(403).json({ success: false, error: "Unauthorized access" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access||অননুমোদিত প্রবেশ" });
             }
 
             // Insert payment record
@@ -329,7 +329,7 @@ class LoanController {
         } catch (error) {
             await trx.rollback();
             console.error("Record payment error:", error);
-            res.status(500).json({ success: false, error: "Failed to record payment" });
+            res.status(500).json({ success: false, error: "Failed to record payment||পেমেন্ট রেকর্ড করতে ব্যর্থ হয়েছে" });
         }
     }
 
@@ -345,20 +345,20 @@ class LoanController {
             const payment = await trx('house_loan_payment').where('id', loanPaymentId).first();
             if (!payment) {
                 await trx.rollback();
-                return res.status(404).json({ success: false, error: "Payment not found" });
+                return res.status(404).json({ success: false, error: "Payment not found||পেমেন্ট খুঁজে পাওয়া যায়নি" });
             }
 
             const loan = await trx('house_loan').where('id', payment.loan_id).first();
             if (!loan) {
                 await trx.rollback();
-                return res.status(404).json({ success: false, error: "Loan not found" });
+                return res.status(404).json({ success: false, error: "Loan not found||ঋণ খুঁজে পাওয়া যায়নি" });
             }
 
             // Access Check
             const house = await trx('house').where('id', loan.house_id).first();
              if (req.user.role.slug === 'house_owner' && house.ownerId !== req.user.id) {
                  await trx.rollback();
-                 return res.status(403).json({ success: false, error: "Unauthorized access" });
+                 return res.status(403).json({ success: false, error: "Unauthorized access||অননুমোদিত প্রবেশ" });
             }
 
             const updateData = {};
@@ -413,7 +413,7 @@ class LoanController {
         } catch (error) {
             await trx.rollback();
             console.error("Update payment error:", error);
-            res.status(500).json({ success: false, error: "Failed to update payment" });
+            res.status(500).json({ success: false, error: "Failed to update payment||পেমেন্ট আপডেট করতে ব্যর্থ হয়েছে" });
         }
     }
 }
