@@ -87,11 +87,34 @@ const landingPageService = require('./src/services/landingPage.service');
 
 // app.use('/api/images', imageRoutes);
 
-// Landing images are public — they appear on the unauthenticated landing page
-app.use("/uploads/landing", express.static(path.join(__dirname, "uploads", "landing")));
+// Landing images are public — they appear on the unauthenticated landing page.
+// Cross-Origin-Resource-Policy must be 'cross-origin' so <img> tags on other
+// origins (dev: localhost:3005 vs :8080; prod: same domain, no-op) can load them.
+app.use(
+  "/uploads/landing",
+  (req, res, next) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  },
+  express.static(path.join(__dirname, "uploads", "landing"), {
+    maxAge: '7d',
+    immutable: false,
+  })
+);
 
-// All other uploads require a valid JWT (must come after the public route above)
-app.use("/uploads", authMiddleware, fileAccessMiddleware, express.static(path.join(__dirname, "uploads")));
+// All other uploads require a valid JWT (must come after the public route above).
+// Cache-Control: private prevents CDN/proxy caching while letting the browser
+// cache the blob for 24 h — avoids a round-trip on every page reload.
+app.use(
+  "/uploads",
+  authMiddleware,
+  fileAccessMiddleware,
+  (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    next();
+  },
+  express.static(path.join(__dirname, "uploads"))
+);
 
 
 app.use("/auth", googleRoute);
