@@ -35,7 +35,7 @@ function checkCaretakerHousePermission(permissionKey) {
       }
 
       // Check permission
-      const hasPermission =  CaretakerPermissionService.hasCaretakerPermission(
+      const hasPermission = await CaretakerPermissionService.hasCaretakerPermission(
         user.id,
         houseId,
         permissionKey

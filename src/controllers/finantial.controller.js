@@ -1545,18 +1545,13 @@ class FinancialController {
           const allCaretakerHouses =
             await CaretakerPermissionService.getCaretakerHouses(userId);
 
-          // Check which houses the caretaker has reports.view permission for
-          for (const hId of allCaretakerHouses) {
-            const hasPermission =
-              await CaretakerPermissionService.hasCaretakerPermission(
-                userId,
-                hId,
-                "reports.view"
-              );
-            if (hasPermission) {
-              houseIds.push(hId);
-            }
-          }
+          // Single JOIN query instead of one query per house
+          const allowedHouses = await CaretakerPermissionService.getHousesWithPermission(
+            userId,
+            allCaretakerHouses,
+            "reports.view"
+          );
+          houseIds.push(...allowedHouses);
 
           // Get names of accessible houses
           if (houseIds.length > 0) {

@@ -302,113 +302,107 @@ class PermissionService {
 
   // Get all staff members with their permissions
   async getAllStaffWithPermissions() {
-    // First get all staff users
+    // Single query: staff + their role via JOIN
     const staffUsers = await db("user")
-      .whereExists(function () {
-        this.select("*")
-          .from("role")
-          .whereRaw("user.roleId = role.id")
-          .where("role.slug", "staff");
-      })
-      .select("user.id", "user.name", "user.email", "user.roleId")
+      .join("role", "user.roleId", "role.id")
+      .where("role.slug", "staff")
+      .select(
+        "user.id", "user.name", "user.email", "user.roleId",
+        "role.id as role_id", "role.name as role_name",
+        "role.slug as role_slug", "role.rank as role_rank",
+        "role.description as role_description"
+      )
       .orderBy("user.name", "asc");
 
-    // Get permissions for each staff member
-    const staffWithPermissions = [];
+    if (staffUsers.length === 0) return [];
 
-    for (const staff of staffUsers) {
-      // Get role
-      const role = await db("role")
-        .where({ id: staff.roleId })
-        .select("id", "name", "slug", "rank", "description")
-        .first();
+    const staffIds = staffUsers.map(s => s.id);
 
-      // Get staff permissions
-      const staffPermissions = await db("staffpermission as sp")
-        .where("sp.userId", staff.id)
-        .whereNull("sp.revokedAt")
-        .leftJoin("permission as p", "sp.permissionId", "p.id")
-        .leftJoin("user as granter", "sp.grantedBy", "granter.id")
-        .select(
-          "sp.*",
-          "p.key as permission_key",
-          "p.description as permission_description",
-          "granter.id as granter_id",
-          "granter.name as granter_name",
-          "granter.email as granter_email"
-        );
+    // Single query: all permissions for all staff at once
+    const allPermissions = await db("staffpermission as sp")
+      .whereIn("sp.userId", staffIds)
+      .whereNull("sp.revokedAt")
+      .leftJoin("permission as p", "sp.permissionId", "p.id")
+      .leftJoin("user as granter", "sp.grantedBy", "granter.id")
+      .select(
+        "sp.userId", "sp.permissionId", "sp.grantedAt",
+        "p.key as permission_key", "p.description as permission_description",
+        "granter.id as granter_id", "granter.name as granter_name",
+        "granter.email as granter_email"
+      );
 
-      staffWithPermissions.push({
-        id: staff.id,
-        name: staff.name,
-        email: staff.email,
-        role: role,
-        permissions: staffPermissions.map((sp) => ({
-          id: sp.permissionId,
-          key: sp.permission_key,
-          description: sp.permission_description,
-          grantedAt: sp.grantedAt,
-          grantedBy: {
-            id: sp.granter_id,
-            name: sp.granter_name,
-            email: sp.granter_email,
-          },
-        })),
-      });
+    // Group permissions by userId in memory
+    const permsByStaff = {};
+    for (const sp of allPermissions) {
+      if (!permsByStaff[sp.userId]) permsByStaff[sp.userId] = [];
+      permsByStaff[sp.userId].push(sp);
     }
 
-    return staffWithPermissions;
+    return staffUsers.map(staff => ({
+      id: staff.id,
+      name: staff.name,
+      email: staff.email,
+      role: {
+        id: staff.role_id,
+        name: staff.role_name,
+        slug: staff.role_slug,
+        rank: staff.role_rank,
+        description: staff.role_description,
+      },
+      permissions: (permsByStaff[staff.id] || []).map(sp => ({
+        id: sp.permissionId,
+        key: sp.permission_key,
+        description: sp.permission_description,
+        grantedAt: sp.grantedAt,
+        grantedBy: {
+          id: sp.granter_id,
+          name: sp.granter_name,
+          email: sp.granter_email,
+        },
+      })),
+    }));
   }
 
-  // Get permission usage statistics
+  // Get permission usage statistics — single aggregation query instead of 3×N
   async getPermissionStats() {
-    const permissions = await db("permission").select(
-      "permission.id",
-      "permission.key",
-      "permission.description"
-    );
+    const rows = await db("permission as p")
+      .leftJoin("rolepermission as rp", "p.id", "rp.permissionId")
+      .leftJoin(
+        db("staffpermission").whereNull("revokedAt").as("sp"),
+        "p.id", "sp.permissionId"
+      )
+      .leftJoin(
+        db("caretakerassignmentpermission as cap")
+          .join("caretakerassignment as ca", "cap.caretakerAssignmentId", "ca.id")
+          .where(function () {
+            this.where("ca.expiresAt", ">", new Date()).orWhereNull("ca.expiresAt");
+          })
+          .whereNull("cap.revokedAt")
+          .select("cap.permissionId")
+          .as("active_cap"),
+        "p.id", "active_cap.permissionId"
+      )
+      .select(
+        "p.id", "p.key", "p.description",
+        db.raw("COUNT(DISTINCT rp.permissionId) as roleAssignments"),
+        db.raw("COUNT(DISTINCT sp.id) as staffAssignments"),
+        db.raw("COUNT(DISTINCT active_cap.permissionId) as caretakerAssignments")
+      )
+      .groupBy("p.id", "p.key", "p.description")
+      .orderBy("p.key", "asc");
 
-    const stats = [];
-
-    for (const perm of permissions) {
-      // Count role assignments
-      const [roleAssignments] = await db("rolepermission")
-        .where("permissionId", perm.id)
-        .count("* as count")
-        .first();
-
-      // Count staff assignments (not revoked)
-      const [staffAssignments] = await db("staffpermission")
-        .where("permissionId", perm.id)
-        .whereNull("revokedAt")
-        .count("* as count")
-        .first();
-
-      const [caretakerAssignments] = await db('caretakerassignmentpermission as cap')
-        .join('caretakerassignment as ca', 'cap.caretakerAssignmentId', 'ca.id')
-        .where('cap.permissionId', perm.id)
-        .where(function() {
-            this.where('ca.expiresAt', '>', new Date())
-                .orWhereNull('ca.expiresAt');
-        })
-        .count('* as count')
-        .first();
-
-      stats.push({
-        id: perm.id,
-        key: perm.key,
-        description: perm.description,
-        totalAssigned:
-          parseInt(roleAssignments.count) +
-          parseInt(staffAssignments.count) +
-          parseInt(caretakerAssignments.count),
-        roleAssignments: parseInt(roleAssignments.count),
-        staffAssignments: parseInt(staffAssignments.count),
-        caretakerAssignments: parseInt(caretakerAssignments.count),
-      });
-    }
-
-    return stats;
+    return rows.map(r => ({
+      id: r.id,
+      key: r.key,
+      description: r.description,
+      roleAssignments: parseInt(r.roleAssignments || 0),
+      staffAssignments: parseInt(r.staffAssignments || 0),
+      caretakerAssignments: parseInt(r.caretakerAssignments || 0),
+      totalAssigned:
+        parseInt(r.roleAssignments || 0) +
+        parseInt(r.staffAssignments || 0) +
+        parseInt(r.caretakerAssignments || 0),
+    }));
   }
 
   // Update user permissions in cache (called after admin updates)

@@ -3,6 +3,42 @@ const fs = require('fs');
 const path = require('path');
 const EmailService = require('./email.service');
 
+// Read logo once at module load — avoids a synchronous disk read on every email.
+let _cachedLogoDataUri = undefined; // undefined = not yet resolved
+function _resolveLogoDataUri() {
+    if (_cachedLogoDataUri !== undefined) return _cachedLogoDataUri;
+
+    const explicitBase64 = process.env.APP_LOGO_BASE64;
+    if (explicitBase64) {
+        _cachedLogoDataUri = explicitBase64.startsWith('data:')
+            ? explicitBase64
+            : `data:image/png;base64,${explicitBase64}`;
+        return _cachedLogoDataUri;
+    }
+
+    const logoPath = process.env.APP_LOGO_PATH;
+    if (logoPath) {
+        try {
+            const resolvedPath = path.isAbsolute(logoPath)
+                ? logoPath
+                : path.resolve(process.cwd(), logoPath);
+            if (fs.existsSync(resolvedPath)) {
+                const extension = path.extname(resolvedPath).replace('.', '').toLowerCase() || 'png';
+                const mimeType = extension === 'svg'
+                    ? 'image/svg+xml'
+                    : `image/${extension === 'jpg' ? 'jpeg' : extension}`;
+                _cachedLogoDataUri = `data:${mimeType};base64,${fs.readFileSync(resolvedPath).toString('base64')}`;
+                return _cachedLogoDataUri;
+            }
+        } catch (error) {
+            console.warn('[NotificationService] Failed to load logo asset:', error.message);
+        }
+    }
+
+    _cachedLogoDataUri = null;
+    return null;
+}
+
 class NotificationService {
     _formatDate(value) {
         if (!value) return '';
@@ -13,33 +49,7 @@ class NotificationService {
     }
 
     _getLogoDataUri() {
-        const explicitBase64 = process.env.APP_LOGO_BASE64;
-        if (explicitBase64) {
-            return explicitBase64.startsWith('data:')
-                ? explicitBase64
-                : `data:image/png;base64,${explicitBase64}`;
-        }
-
-        const logoPath = process.env.APP_LOGO_PATH;
-        if (logoPath) {
-            try {
-                const resolvedPath = path.isAbsolute(logoPath)
-                    ? logoPath
-                    : path.resolve(process.cwd(), logoPath);
-                if (fs.existsSync(resolvedPath)) {
-                    const extension = path.extname(resolvedPath).replace('.', '').toLowerCase() || 'png';
-                    const mimeType = extension === 'svg'
-                        ? 'image/svg+xml'
-                        : `image/${extension === 'jpg' ? 'jpeg' : extension}`;
-                    const fileBuffer = fs.readFileSync(resolvedPath);
-                    return `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
-                }
-            } catch (error) {
-                console.warn('[NotificationService] Failed to load logo asset:', error.message);
-            }
-        }
-
-        return null;
+        return _resolveLogoDataUri();
     }
 
     _buildBrandHeader(title, subtitle) {

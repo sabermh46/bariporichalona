@@ -65,6 +65,34 @@ class CaretakerPermissionService {
   }
 
   /**
+   * Batch version of hasCaretakerPermission — returns only the house IDs from
+   * `houseIds` where the caretaker has the given permission. Replaces a
+   * per-house loop with a single JOIN query.
+   */
+  async getHousesWithPermission(caretakerId, houseIds, permissionKey) {
+    try {
+      if (!caretakerId || !houseIds?.length || !permissionKey) return [];
+
+      const rows = await db('caretakerassignment as ca')
+        .join('caretakerassignmentpermission as cap', 'ca.id', 'cap.caretakerAssignmentId')
+        .join('permission as p', 'cap.permissionId', 'p.id')
+        .where('ca.caretakerId', caretakerId)
+        .whereIn('ca.houseId', houseIds)
+        .andWhere(function () {
+          this.where('ca.expiresAt', '>', new Date()).orWhereNull('ca.expiresAt');
+        })
+        .where('p.key', permissionKey)
+        .whereNull('cap.revokedAt')
+        .select('ca.houseId');
+
+      return rows.map(r => parseInt(r.houseId));
+    } catch (error) {
+      console.error('Error in getHousesWithPermission:', error.message);
+      return [];
+    }
+  }
+
+  /**
    * Get all permissions for a caretaker in a specific house
    */
   async getCaretakerHousePermissions(caretakerId, houseId) {
