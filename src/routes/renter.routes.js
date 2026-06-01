@@ -6,6 +6,7 @@ const roleMiddleware = require('../middleware/role.middleware');
 const RenterController = require('../controllers/rent.controller');
 const { renterUploadMiddleware } = require('../middleware/uploadMiddleware');
 const multipartHandler = require('../middleware/multipartHandler');
+const db = require('../config/knex');
 
 // Create renter (with file upload)
 router.post('/renters',
@@ -69,6 +70,12 @@ router.get('/houses/:houseId/renters',
             const { houseId } = req.params;
             const { page = 1, limit = 20 } = req.query;
             const offset = (page - 1) * limit;
+
+            // house_owner may only list renters for their own houses
+            if (req.user.role.slug === 'house_owner') {
+                const house = await db('house').where({ id: houseId, ownerId: req.user.id }).first('id');
+                if (!house) return res.status(403).json({ success: false, error: 'Access denied' });
+            }
             
             // Get renters assigned to flats in this house
             const renters = await db('renter')

@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const { validateMagicBytes } = require('../utils/validateMagicBytes');
 
 // Create a function that returns different middleware based on content-type
 const multipartHandler = () => {
@@ -53,6 +54,19 @@ const multipartHandler = () => {
             error: err.message
           });
         }
+
+        // Validate actual file content against declared extension
+        const allFiles = Object.values(req.files || {}).flat();
+        for (const file of allFiles) {
+          if (!validateMagicBytes(file.path, file.originalname)) {
+            fs.unlinkSync(file.path);
+            return res.status(422).json({
+              success: false,
+              error: 'File content does not match its declared type. Upload rejected.'
+            });
+          }
+        }
+
         next();
       });
     } else {

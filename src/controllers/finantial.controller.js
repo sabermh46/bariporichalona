@@ -6,11 +6,10 @@ const { v4: uuidv4 } = require('uuid');
 const NotificationService = require('../services/emailSmsNotification.service');
 const notify = require('../services/inAppNotification.service');
 const CaretakerPermissionService = require('../services/CaretakerPermission.service');
-const HouseController = require('./house.controller');
 const permissionService = require('../services/permission.service');
-const accessCache = require('../utils/accessCache');
 const { serializeBigInt } = require('../utils/serializer');
 const AppFeePaymentController = require('./appFeePayment.controller');
+const FinancialService = require('../services/financial.service');
 class FinancialController {
   constructor() {
     // bind all to fix the this.function() reading indefined
@@ -20,8 +19,6 @@ class FinancialController {
     this.recordAppFeePayment = this.recordAppFeePayment.bind(this);
     this.getFinancialDashboard = this.getFinancialDashboard.bind(this);
     this.sendRentReminders = this.sendRentReminders.bind(this);
-    this.checkHouseAccess = this.checkHouseAccess.bind(this);
-    this.calculateNextDueDate = this.calculateNextDueDate.bind(this);
     this.calculateMonthlyProfit = this.calculateMonthlyProfit.bind(this);
     this.getProfitReport = this.getProfitReport.bind(this);
     this.updateRentPayment = this.updateRentPayment.bind(this);
@@ -46,7 +43,7 @@ class FinancialController {
 
       // Check permission
       if (req.user.role.slug !== "web_owner") {
-        const hasAccess = await this.checkHouseAccess(userId, houseId);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, houseId);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -146,7 +143,7 @@ class FinancialController {
 
       // Check permission
       if (req.user.role.slug !== "web_owner") {
-        const hasAccess = await this.checkHouseAccess(userId, houseId);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, houseId);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -262,14 +259,6 @@ class FinancialController {
       });
     }
   }
-  // Helper: get for_month string YYYY-MM from a Date
-  getForMonth(date) {
-    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return null;
-    const y = date.getFullYear();
-    const m = date.getMonth() + 1;
-    return `${y}-${String(m).padStart(2, "0")}`;
-  }
-
   // 1. Record rent payment (manual by house owner + need to ensure that caretaker has permission)
   async recordRentPayment(req, res) {
     try {
@@ -456,7 +445,7 @@ class FinancialController {
 
         // One record per flat per month: check by for_month (YYYY-MM)
         if (dueDate) {
-          const forMonthStr = this.getForMonth(dueDate);
+          const forMonthStr = FinancialService.getForMonth(dueDate);
           const existingForMonth = await db("rent_payment")
             .where("flat_id", flat_id)
             .andWhere("for_month", forMonthStr)
@@ -577,7 +566,7 @@ class FinancialController {
           calculationMethod: currentPayment ?
             (currentPayment.base_amount !== null ? "breakdown" : "simple") :
             "new_pending_due",
-          dueMonth: dueDate ? this.getForMonth(dueDate) : null,
+          dueMonth: dueDate ? FinancialService.getForMonth(dueDate) : null,
         },
       };
 
@@ -621,7 +610,7 @@ class FinancialController {
             updated_at: new Date(),
           };
           if (currentPayment.for_month == null && currentPayment.due_date) {
-            updatePayload.for_month = this.getForMonth(new Date(currentPayment.due_date));
+            updatePayload.for_month = FinancialService.getForMonth(new Date(currentPayment.due_date));
           }
           await trx("rent_payment").where("id", currentPayment.id).update(updatePayload);
           paymentId = currentPayment.id;
@@ -637,7 +626,7 @@ class FinancialController {
             });
           }
 
-          const forMonthStr = this.getForMonth(dueDate);
+          const forMonthStr = FinancialService.getForMonth(dueDate);
           const newPayment = {
             uuid: uuidv4(),
             flat_id,
@@ -695,7 +684,7 @@ class FinancialController {
         // AND only if calculate_next_payment is true
         if (currentPayment && finalStatus !== "pending" && 
             String(calculate_next_payment) === "true") {
-          nextDueDate = await this.calculateNextDueDate(
+          nextDueDate = await FinancialService.calculateNextDueDate(
             actualPaidDate,
             flat.should_pay_rent_day
           );
@@ -715,7 +704,7 @@ class FinancialController {
           );
 
           const nextPaymentTotal = baseRentAmount + nextAmenitiesTotal;
-          const nextForMonth = this.getForMonth(nextDueDate);
+          const nextForMonth = FinancialService.getForMonth(nextDueDate);
           const existingNext = await trx("rent_payment")
             .where("flat_id", flat_id)
             .andWhere("for_month", nextForMonth)
@@ -789,7 +778,7 @@ class FinancialController {
             status: finalStatus,
             nextDueDate,
             dueDate: dueDate || (currentPayment ? currentPayment.due_date : null),
-            for_month: dueDate ? this.getForMonth(dueDate) : (currentPayment && currentPayment.due_date ? this.getForMonth(new Date(currentPayment.due_date)) : null),
+            for_month: dueDate ? FinancialService.getForMonth(dueDate) : (currentPayment && currentPayment.due_date ? FinancialService.getForMonth(new Date(currentPayment.due_date)) : null),
             metadata: paymentMetadata,
             action: currentPayment ? "payment_recorded" : "pending_due_created",
           },
@@ -1004,7 +993,12 @@ class FinancialController {
         houseIds = [hId];
       }
 
-      const renters = await db("renter").select("id", "name", "phone", "email", "metadata");
+      // Pre-filter to renters that actually carry a refund_due entry in their metadata JSON,
+      // avoiding a full-table scan across every renter in the system.
+      const renters = await db("renter")
+        .whereNotNull("metadata")
+        .where("metadata", "like", '%"refund_due"%')
+        .select("id", "name", "phone", "email", "metadata");
       const list = [];
 
       for (const renter of renters) {
@@ -1137,21 +1131,6 @@ class FinancialController {
     }
   }
 
-  calculateNextDueDate(currentDate, dayOfMonth) {
-      // Ensure dayOfMonth is a valid number, default to current day if missing
-      const day = parseInt(dayOfMonth) || currentDate.getDate();
-      
-      const nextMonth = new Date(currentDate);
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      nextMonth.setDate(day);
-
-      // Check if the date is valid
-      if (isNaN(nextMonth.getTime())) {
-          return new Date(); // Fallback to now if calculation fails
-      }
-
-      return nextMonth; 
-  }
   // 2. Generate monthly rent invoices
   async generateRentInvoices(req, res) {
     try {
@@ -1160,7 +1139,7 @@ class FinancialController {
 
       // Check permission
       if (req.user.role.slug === "caretaker") {
-        const hasAccess = await this.checkHouseAccess(userId, house_id);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, house_id);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -1195,43 +1174,45 @@ class FinancialController {
       const invoices = [];
       const errors = [];
 
+      // getForMonth returns "YYYY-MM" which is identical for all flats in the same targetMonth,
+      // so one batch SELECT replaces N individual duplicate-check queries.
+      const forMonthStr = FinancialService.getForMonth(
+        new Date(targetMonth.getFullYear(), targetMonth.getMonth(), 1)
+      );
+      const alreadyExistingFlatIds = new Set(
+        await db("rent_payment")
+          .whereIn("flat_id", flats.map((f) => f.id))
+          .andWhere("for_month", forMonthStr)
+          .pluck("flat_id")
+      );
+
       for (const flat of flats) {
         try {
-          // Calculate due date for next month
-          const dueDate = new Date(
-            targetMonth.getFullYear(),
-            targetMonth.getMonth(),
-            flat.should_pay_rent_day
-          );
-
-          const forMonthStr = this.getForMonth(dueDate);
-          const existingInvoice = await db("rent_payment")
-            .where("flat_id", flat.id)
-            .andWhere("for_month", forMonthStr)
-            .first();
-
-          if (existingInvoice) {
+          if (alreadyExistingFlatIds.has(flat.id)) {
             errors.push(
               `Invoice already exists for flat ${flat.number} for ${forMonthStr}`
             );
             continue;
           }
 
-          // Create rent payment record (one per flat per month)
-          const rentPayment = {
+          const dueDate = new Date(
+            targetMonth.getFullYear(),
+            targetMonth.getMonth(),
+            flat.should_pay_rent_day
+          );
+
+          const [paymentId] = await db("rent_payment").insert({
             uuid: uuidv4(),
             flat_id: flat.id,
             renter_id: flat.renter_id,
             house_id,
             amount: flat.rent_amount || 0,
-            due_date,
+            due_date: dueDate,
             for_month: forMonthStr,
             status: "pending",
             created_at: new Date(),
             updated_at: new Date(),
-          };
-
-          const [paymentId] = await db("rent_payment").insert(rentPayment);
+          });
 
           invoices.push({
             flatId: flat.id,
@@ -1290,7 +1271,7 @@ class FinancialController {
 
       // Check permission
       if (req.user.role.slug !== "web_owner") {
-        const hasAccess = await this.checkHouseAccess(userId, house_id);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, house_id);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -1511,7 +1492,7 @@ class FinancialController {
       if (houseId) {
         // Check access for specific house
         if (userRole !== "web_owner") {
-          const hasAccess = await this.checkHouseAccess(userId, houseId);
+          const hasAccess = await FinancialService.checkHouseAccess(userId, houseId);
           if (!hasAccess) {
             return res.status(403).json({
               success: false,
@@ -1614,27 +1595,27 @@ class FinancialController {
       if (endDate) dateFilter.endDate = new Date(endDate);
 
       // Get overview statistics with house names
-      const overview = await this.getFinancialOverview(
+      const overview = await FinancialService.getFinancialOverview(
         houseIds,
         dateFilter,
         houseDetails
       );
 
       // Get recent transactions with enhanced details
-      const recentTransactions = await this.getRecentTransactions(
+      const recentTransactions = await FinancialService.getRecentTransactions(
         houseIds,
         dateFilter,
         houseDetails
       );
 
       // Get upcoming payments with house and flat names
-      const upcomingPayments = await this.getUpcomingPayments(
+      const upcomingPayments = await FinancialService.getUpcomingPayments(
         houseIds,
         houseDetails
       );
 
       // Get chart data
-      const chartData = await this.getChartData(houseIds, dateFilter);
+      const chartData = await FinancialService.getChartData(houseIds, dateFilter);
 
       return res.json({
         success: true,
@@ -1655,260 +1636,6 @@ class FinancialController {
     }
   }
 
-  async getRecentTransactions(houseIds, dateFilter, houseDetails) {
-    try {
-      // Get current date for calculating date range if not provided
-      const defaultEndDate = new Date();
-      const defaultStartDate = new Date();
-      defaultStartDate.setMonth(defaultStartDate.getMonth() - 1); // Last 30 days
-
-      const start = dateFilter.startDate || defaultStartDate;
-      const end = dateFilter.endDate || defaultEndDate;
-
-      // Get rent payments with all details
-      const rentPaymentsQuery = db("rent_payment as rp")
-        .join("house as h", "rp.house_id", "h.id")
-        .leftJoin("flat as f", "rp.flat_id", "f.id")
-        .leftJoin("renter as r", "rp.renter_id", "r.id")
-        .whereIn("rp.house_id", houseIds)
-        .andWhereBetween("rp.created_at", [start, end])
-        .select(
-          "rp.*",
-          "h.name as house_name",
-          "f.number as flat_number",
-          "f.name as flat_name",
-          "r.name as renter_name",
-          db.raw('"rent_payment" as transaction_type')
-        );
-
-      // Get expenses with house details
-      const expensesQuery = db("house_expense as he")
-        .join("house as h", "he.house_id", "h.id")
-        .whereIn("he.house_id", houseIds)
-        .andWhereBetween("he.created_at", [start, end])
-        .andWhere("he.status", "approved")
-        .select(
-          "he.*",
-          "h.name as house_name",
-          db.raw('"expense" as transaction_type'),
-          db.raw("NULL as flat_number"),
-          db.raw("NULL as flat_name"),
-          db.raw("NULL as renter_name")
-        );
-
-      // Get advance payments with details
-      const advancePaymentsQuery = db("advance_payment as ap")
-        .join("house as h", "ap.house_id", "h.id")
-        .leftJoin("flat as f", "ap.flat_id", "f.id")
-        .leftJoin("renter as r", "ap.renter_id", "r.id")
-        .whereIn("ap.house_id", houseIds)
-        .andWhereBetween("ap.created_at", [start, end])
-        .select(
-          "ap.*",
-          "h.name as house_name",
-          "f.number as flat_number",
-          "f.name as flat_name",
-          "r.name as renter_name",
-          db.raw('"advance_payment" as transaction_type')
-        );
-
-      // Execute all queries in parallel
-      const [rentPayments, expenses, advancePayments] = await Promise.all([
-        rentPaymentsQuery.orderBy("rp.created_at", "desc").limit(15),
-        expensesQuery.orderBy("he.created_at", "desc").limit(5),
-        advancePaymentsQuery.orderBy("ap.created_at", "desc").limit(5),
-      ]);
-
-      // Combine all transactions
-      const allTransactions = [...rentPayments, ...expenses, ...advancePayments]
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-        .slice(0, 20);
-
-      // Format transactions
-      const formattedTransactions = allTransactions.map((tx) => {
-        const baseTransaction = {
-          id: tx.id,
-          uuid: tx.uuid,
-          house_id: tx.house_id,
-          house_name: tx.house_name,
-          type: tx.transaction_type,
-          amount: parseFloat(tx.amount || 0),
-          created_at: tx.created_at,
-          status: tx.status,
-          payment_method: tx.payment_method || null,
-        };
-
-        switch (tx.transaction_type) {
-          case "rent_payment":
-            return {
-              ...baseTransaction,
-              flat_id: tx.flat_id,
-              flat_number: tx.flat_number,
-              flat_name: tx.flat_name,
-              renter_id: tx.renter_id,
-              renter_name: tx.renter_name,
-              paid_amount: parseFloat(tx.paid_amount || 0),
-              paid_date: tx.paid_date,
-              due_date: tx.due_date,
-              transaction_id: tx.transaction_id,
-              late_fee_amount: parseFloat(tx.late_fee_amount || 0),
-              notes: tx.notes,
-              base_amount: parseFloat(tx.base_amount || 0),
-              amenities_charge: parseFloat(tx.amenities_charge || 0),
-              created_by: tx.created_by,
-              description: `Rent payment for ${
-                tx.flat_name || `Flat ${tx.flat_number}`
-              }`,
-            };
-
-          case "expense":
-            return {
-              ...baseTransaction,
-              category: tx.category,
-              description: tx.description || `${tx.category} expense`,
-              expense_date: tx.expense_date,
-              paid_by: tx.paid_by,
-              receipt_url: tx.receipt_url,
-              approved_by: tx.approved_by,
-              metadata: tx.metadata,
-            };
-
-          case "advance_payment":
-            return {
-              ...baseTransaction,
-              flat_id: tx.flat_id,
-              flat_number: tx.flat_number,
-              flat_name: tx.flat_name,
-              renter_id: tx.renter_id,
-              renter_name: tx.renter_name,
-              paid_amount: parseFloat(tx.paid_amount || 0),
-              remaining_amount: parseFloat(tx.remaining_amount || 0),
-              payment_date: tx.payment_date,
-              transaction_id: tx.transaction_id,
-              notes: tx.notes,
-              metadata: tx.metadata,
-              description: `Advance payment for ${tx.renter_name || ""}`,
-            };
-
-          default:
-            return baseTransaction;
-        }
-      });
-
-      return formattedTransactions;
-    } catch (error) {
-      console.error("Error in getRecentTransactions:", error);
-      throw new Error("Failed to fetch recent transactions: " + error.message);
-    }
-  }
-
-  async getFinancialOverview(houseIds, dateFilter, houseDetails) {
-    try {
-      // Get current month for monthly calculations
-      const currentDate = new Date();
-      const currentMonth = currentDate.getMonth() + 1;
-      const currentYear = currentDate.getFullYear();
-
-      // Calculate start and end of current month
-      const monthStart = new Date(currentYear, currentMonth - 1, 1);
-      const monthEnd = new Date(currentYear, currentMonth, 0);
-
-      // Total rent due (sum of all pending/overdue rent)
-      const rentStats = await db("rent_payment")
-        .whereIn("house_id", houseIds)
-        .select(
-          db.raw("SUM(amount) as totalDue"),
-          db.raw("SUM(paid_amount) as totalCollected"),
-          db.raw(
-            'COUNT(CASE WHEN status = "pending" THEN 1 END) as pendingCount'
-          ),
-          db.raw(
-            'COUNT(CASE WHEN status = "overdue" THEN 1 END) as overdueCount'
-          )
-        )
-        .first();
-
-      // Monthly rent collected (current month only)
-      const monthlyRentCollected = await db("rent_payment")
-        .whereIn("house_id", houseIds)
-        .andWhere("status", "paid")
-        .andWhere("paid_date", ">=", monthStart)
-        .andWhere("paid_date", "<=", monthEnd)
-        .sum("paid_amount as total")
-        .first();
-
-      // Monthly expenses (current month only)
-      const monthlyExpenses = await db("house_expense")
-        .whereIn("house_id", houseIds)
-        .andWhere("status", "approved")
-        .andWhere("expense_date", ">=", monthStart)
-        .andWhere("expense_date", "<=", monthEnd)
-        .sum("amount as total")
-        .first();
-
-      // Total expenses (all time, filtered by date if provided)
-      let totalExpensesQuery = db("house_expense")
-        .whereIn("house_id", houseIds)
-        .andWhere("status", "approved");
-
-      if (dateFilter.startDate) {
-        totalExpensesQuery = totalExpensesQuery.andWhere(
-          "created_at",
-          ">=",
-          dateFilter.startDate
-        );
-      }
-      if (dateFilter.endDate) {
-        totalExpensesQuery = totalExpensesQuery.andWhere(
-          "created_at",
-          "<=",
-          dateFilter.endDate
-        );
-      }
-
-      const totalExpensesResult = await totalExpensesQuery
-        .sum("amount as total")
-        .first();
-
-      // Total advance payments
-      const totalAdvance = await db("advance_payment")
-        .whereIn("house_id", houseIds)
-        .sum("amount as total")
-        .first();
-
-      const totalRentDue = parseFloat(rentStats?.totalDue || 0);
-      const totalRentCollected = parseFloat(rentStats?.totalCollected || 0);
-      const totalExpenses = parseFloat(totalExpensesResult?.total || 0);
-      const monthlyRent = parseFloat(monthlyRentCollected?.total || 0);
-      const monthlyExpensesAmount = parseFloat(monthlyExpenses?.total || 0);
-      const totalAdvanceAmount = parseFloat(totalAdvance?.total || 0);
-
-      const netIncome = totalRentCollected - totalExpenses;
-      const monthlyNetIncome = monthlyRent - monthlyExpensesAmount;
-      const pendingPayments = parseInt(rentStats?.pendingCount || 0);
-      const overduePayments = parseInt(rentStats?.overdueCount || 0);
-
-      return {
-        totalRentDue,
-        totalRentCollected,
-        totalExpenses,
-        monthlyRentCollection: monthlyRent,
-        monthlyExpenses: monthlyExpensesAmount,
-        monthlyNetIncome,
-        netIncome,
-        pendingPayments,
-        overduePayments,
-        totalAdvance: totalAdvanceAmount,
-        houseCount: houseIds.length,
-        houseNames: Object.values(houseDetails).map((h) => h.name),
-      };
-    } catch (error) {
-      console.error("Error in getFinancialOverview:", error);
-      throw new Error(
-        "Failed to calculate financial overview: " + error.message
-      );
-    }
-  }
 
   // 6. Send rent reminder instantly for a specific flat
   // Body: { flat_id, houseId }
@@ -1954,7 +1681,7 @@ class FinancialController {
 
       // Check permission (house_owner must own this house)
       if (req.user.role.slug !== "web_owner" && req.user.role.slug !== "staff") {
-        const hasAccess = await this.checkHouseAccess(userId, houseId);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, houseId);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -2100,7 +1827,7 @@ class FinancialController {
 
       // Permission: web_owner has full access; others must have house access
       if (req.user.role.slug !== 'web_owner') {
-        const hasAccess = await this.checkHouseAccess(userId, payment.house_id);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, payment.house_id);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -2182,7 +1909,7 @@ class FinancialController {
 
       // Permission
       if (req.user.role.slug !== 'web_owner') {
-        const hasAccess = await this.checkHouseAccess(userId, flat.house_id);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, flat.house_id);
         if (!hasAccess) {
           return res.status(403).json({
             success: false,
@@ -2266,7 +1993,7 @@ class FinancialController {
       }
 
       if (req.user.role.slug !== 'web_owner') {
-        const hasAccess = await this.checkHouseAccess(userId, payment.house_id);
+        const hasAccess = await FinancialService.checkHouseAccess(userId, payment.house_id);
         if (!hasAccess) {
           return res.status(403).json({ success: false, error: 'No permission for this house||এই বাড়ির জন্য অনুমতি নেই' });
         }
@@ -2324,170 +2051,6 @@ class FinancialController {
     }
   }
 
-  // Helper methods [maybe this need to update with your latest code ]
-  async checkHouseAccess(userId, houseId) {
-    return await accessCache.checkHouseAccess(
-      userId,
-      houseId,
-      db,
-      HouseController,
-      CaretakerPermissionService
-    );
-  }
-
-  async getUpcomingPayments(houseIds, houseDetails) {
-    try {
-      const thirtyDaysFromNow = new Date();
-      thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-
-      const upcomingPayments = await db("rent_payment as rp")
-        .join("flat as f", "rp.flat_id", "f.id")
-        .join("house as h", "rp.house_id", "h.id")
-        .join("renter as r", "rp.renter_id", "r.id")
-        .whereIn("rp.house_id", houseIds)
-        .andWhere("rp.status", "pending")
-        .andWhere("rp.due_date", "<=", thirtyDaysFromNow)
-        .andWhere("rp.due_date", ">=", new Date())
-        .select(
-          "rp.*",
-          "f.number as flat_number",
-          "f.name as flat_name",
-          "h.name as house_name",
-          "r.name as renter_name",
-          "r.phone as renter_phone",
-          db.raw("DATEDIFF(rp.due_date, CURDATE()) as days_left")
-        )
-        .orderBy("rp.due_date", "asc")
-        .limit(20);
-
-      return upcomingPayments.map((payment) => ({
-        id: payment.id,
-        amount: parseFloat(payment.amount || 0),
-        due_date: payment.due_date,
-        days_left: payment.days_left,
-        status: payment.status,
-        flat: {
-          id: payment.flat_id,
-          number: payment.flat_number,
-          name: payment.flat_name,
-        },
-        house: {
-          id: payment.house_id,
-          name: payment.house_name,
-        },
-        renter: {
-          id: payment.renter_id,
-          name: payment.renter_name,
-          phone: payment.renter_phone,
-        },
-      }));
-    } catch (error) {
-      console.error("Error in getUpcomingPayments:", error);
-      throw new Error("Failed to fetch upcoming payments: " + error.message);
-    }
-  }
-
-  async getChartData(houseIds, dateFilter) {
-    try {
-      const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-
-      // Get monthly rent collected
-      const monthlyRent = await db("rent_payment")
-        .whereIn("house_id", houseIds)
-        .andWhere("status", "paid")
-        .andWhere("paid_date", ">=", sixMonthsAgo)
-        .select(
-          db.raw('DATE_FORMAT(paid_date, "%Y-%m") as month'),
-          db.raw("SUM(paid_amount) as amount"),
-          db.raw("COUNT(*) as payment_count")
-        )
-        .groupBy("month")
-        .orderBy("month", "asc");
-
-      // Get monthly expenses
-      const monthlyExpenses = await db("house_expense")
-        .whereIn("house_id", houseIds)
-        .andWhere("status", "approved")
-        .andWhere("expense_date", ">=", sixMonthsAgo)
-        .select(
-          db.raw('DATE_FORMAT(expense_date, "%Y-%m") as month'),
-          db.raw("SUM(amount) as amount"),
-          db.raw("COUNT(*) as expense_count")
-        )
-        .groupBy("month")
-        .orderBy("month", "asc");
-
-      // Get payment status distribution
-      const paymentStatus = await db("rent_payment")
-        .whereIn("house_id", houseIds)
-        .select(
-          "status",
-          db.raw("COUNT(*) as count"),
-          db.raw("SUM(amount) as amount")
-        )
-        .groupBy("status");
-
-      // Get expense categories
-      const expenseCategories = await db("house_expense")
-        .whereIn("house_id", houseIds)
-        .andWhere("status", "approved")
-        .andWhere("expense_date", ">=", sixMonthsAgo)
-        .select(
-          "category",
-          db.raw("SUM(amount) as amount"),
-          db.raw("COUNT(*) as count")
-        )
-        .groupBy("category");
-
-      // Get rent collection by house
-      const rentByHouse = await db("rent_payment as rp")
-        .join("house as h", "rp.house_id", "h.id")
-        .whereIn("rp.house_id", houseIds)
-        .andWhere("rp.status", "paid")
-        .andWhere("rp.paid_date", ">=", sixMonthsAgo)
-        .select(
-          "h.id as house_id",
-          "h.name as house_name",
-          db.raw("SUM(rp.paid_amount) as amount"),
-          db.raw("COUNT(*) as payment_count")
-        )
-        .groupBy("h.id", "h.name")
-        .orderBy("amount", "desc");
-
-      return {
-        monthlyRent: monthlyRent.map((item) => ({
-          month: item.month,
-          amount: parseFloat(item.amount || 0),
-          payment_count: parseInt(item.payment_count || 0),
-        })),
-        monthlyExpenses: monthlyExpenses.map((item) => ({
-          month: item.month,
-          amount: parseFloat(item.amount || 0),
-          expense_count: parseInt(item.expense_count || 0),
-        })),
-        paymentStatus: paymentStatus.map((item) => ({
-          status: item.status,
-          count: parseInt(item.count || 0),
-          amount: parseFloat(item.amount || 0),
-        })),
-        expenseCategories: expenseCategories.map((item) => ({
-          category: item.category,
-          amount: parseFloat(item.amount || 0),
-          count: parseInt(item.count || 0),
-        })),
-        rentByHouse: rentByHouse.map((item) => ({
-          house_id: item.house_id,
-          house_name: item.house_name,
-          amount: parseFloat(item.amount || 0),
-          payment_count: parseInt(item.payment_count || 0),
-        })),
-      };
-    } catch (error) {
-      console.error("Error in getChartData:", error);
-      throw new Error("Failed to fetch chart data: " + error.message);
-    }
-  }
 }
 
 module.exports = new FinancialController();

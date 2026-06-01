@@ -333,32 +333,29 @@ class FlatController {
         });
       }
 
-      // Get total count
+      // Clone before awaiting — both use the same permission-filtered query
       const countQuery = query
         .clone()
         .clearSelect()
         .count("flat.id as count")
         .first();
-      const totalResult = await countQuery;
+
+      const statsQuery = query
+        .clone()
+        .clearSelect()
+        .select(
+          db.raw("COUNT(*) as total"),
+          db.raw("SUM(CASE WHEN flat.renter_id IS NULL THEN 1 ELSE 0 END) as vacant"),
+          db.raw("SUM(CASE WHEN flat.renter_id IS NOT NULL THEN 1 ELSE 0 END) as occupied")
+        )
+        .first();
+
+      const [totalResult, stats] = await Promise.all([countQuery, statsQuery]);
       const total = parseInt(totalResult.count);
 
       // Get paginated results
       query.limit(limit).offset(offset).orderBy("flat.createdAt", "desc");
       const flats = await query;
-
-      // Calculate occupancy statistics
-      const stats = await db("flat")
-        .where("house_id", house_id || db.raw("flat.house_id"))
-        .select(
-          db.raw("COUNT(*) as total"),
-          db.raw(
-            "SUM(CASE WHEN renter_id IS NULL THEN 1 ELSE 0 END) as vacant"
-          ),
-          db.raw(
-            "SUM(CASE WHEN renter_id IS NOT NULL THEN 1 ELSE 0 END) as occupied"
-          )
-        )
-        .first();
 
       return res.json({
         success: true,
@@ -412,7 +409,14 @@ class FlatController {
           error: "Flat not found",
         });
       }
-      
+
+      // house_owner may only view flats belonging to their own houses
+      if (req.user.role.slug === "house_owner" && String(flat.ownerId) !== String(userId)) {
+        return res.status(403).json({
+          success: false,
+          error: "You do not have permission to view this flat",
+        });
+      }
 
       // Check permission
       if (req.user.role.slug === "caretaker") {

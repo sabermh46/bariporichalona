@@ -80,7 +80,17 @@ router.get('/flats/:id/payments',
             const { id } = req.params;
             const { page = 1, limit = 10, status } = req.query;
             const offset = (page - 1) * limit;
-            
+
+            // Verify the flat belongs to the requesting house_owner
+            if (req.user.role.slug === 'house_owner') {
+                const owned = await db('flat')
+                    .join('house', 'flat.house_id', 'house.id')
+                    .where('flat.id', id)
+                    .where('house.ownerId', req.user.id)
+                    .first('flat.id');
+                if (!owned) return res.status(403).json({ success: false, error: 'Access denied' });
+            }
+
             let query = db('rent_payment')
                 .where('flat_id', id)
                 .orderBy('due_date', 'desc');
@@ -122,17 +132,23 @@ router.get('/flats/:id/financial-summary',
         try {
             const { id } = req.params;
             const { year, month } = req.query;
-            
+
             const flat = await db('flat')
-                .where('id', id)
-                .select('*')
+                .join('house', 'flat.house_id', 'house.id')
+                .where('flat.id', id)
+                .select('flat.*', 'house.ownerId as houseOwnerId')
                 .first();
-            
+
             if (!flat) {
                 return res.status(404).json({
                     success: false,
                     error: 'Flat not found'
                 });
+            }
+
+            // house_owner may only access flats that belong to their houses
+            if (req.user.role.slug === 'house_owner' && String(flat.houseOwnerId) !== String(req.user.id)) {
+                return res.status(403).json({ success: false, error: 'Access denied' });
             }
             
             let paymentQuery = db('rent_payment').where('flat_id', id);

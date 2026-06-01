@@ -19,8 +19,13 @@ router.get('/houses/:houseOwnerId/expenses',
     roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     async (req, res) => {
         try {
-            const { houseOwnerId } = req.params;
+            let { houseOwnerId } = req.params;
             const { houseId } = req.query; // Typically comes from ?houseId=...
+
+            // house_owner may only query their own expenses, not another owner's
+            if (req.user.role.slug === 'house_owner') {
+                houseOwnerId = req.user.id;
+            }
 
             // 1. Get all valid house IDs owned by this user for security/filtering
             const ownedHouseIds = await db('house')
@@ -91,8 +96,17 @@ router.get('/payments/rent',
         const { status, houseId, startDate, endDate } = req.query;
         let query = db('rent_payment').select('*');
 
+        // Ownership filter: house_owner may only see payments for their own houses
+        if (req.user.role.slug === 'house_owner') {
+            const accessibleIds = await db('house').where('ownerId', req.user.id).pluck('id');
+            query.whereIn('house_id', accessibleIds);
+        }
+
         if (status) query.where('status', status);
-        if (houseId) query.where('house_id', houseId);
+        if (houseId) {
+            // For house_owner the whereIn above already constrains the set; this is an additional narrow
+            query.where('house_id', houseId);
+        }
         if (startDate) query.where('due_date', '>=', new Date(startDate));
         if (endDate) query.where('due_date', '<=', new Date(endDate));
 

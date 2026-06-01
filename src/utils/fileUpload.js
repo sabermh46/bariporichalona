@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const { validateMagicBytes } = require('./validateMagicBytes');
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -80,6 +81,31 @@ const cleanupTempFiles = (filePaths) => {
     });
 };
 
+// Middleware: validate magic bytes after multer saves file(s) to temp
+const validateUploadMiddleware = (req, res, next) => {
+  const files = [];
+  if (req.file) files.push(req.file);
+  if (req.files) {
+    if (Array.isArray(req.files)) {
+      files.push(...req.files);
+    } else {
+      Object.values(req.files).forEach(arr => files.push(...arr));
+    }
+  }
+
+  for (const file of files) {
+    if (!validateMagicBytes(file.path, file.originalname)) {
+      fs.unlinkSync(file.path);
+      return res.status(422).json({
+        success: false,
+        error: 'File content does not match its declared type. Upload rejected.'
+      });
+    }
+  }
+
+  next();
+};
+
 // Get file URL
 const getFileUrl = (filePath) => {
   if (!filePath) return null;
@@ -89,6 +115,7 @@ const getFileUrl = (filePath) => {
 module.exports = {
   uploadMultipleMiddleware,
   uploadSingleMiddleware,
+  validateUploadMiddleware,
   moveToPermanentLocation,
   cleanupTempFiles,
   getFileUrl,

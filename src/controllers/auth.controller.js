@@ -169,14 +169,17 @@ class AuthController {
 
       let parsedMetadata = {};
       if (metadata) {
+        let raw = {};
         if (typeof metadata === 'string') {
-          try {
-            parsedMetadata = JSON.parse(metadata);
-          } catch (err) {
-            parsedMetadata = {};
-          }
-        } else if (typeof metadata === 'object') {
-          parsedMetadata = metadata;
+          try { raw = JSON.parse(metadata); } catch (_) {}
+        } else if (typeof metadata === 'object' && !Array.isArray(metadata)) {
+          raw = metadata;
+        }
+        // Only house_ids is accepted from user input; everything else is system-assigned
+        if (Array.isArray(raw.house_ids) && raw.house_ids.length > 0) {
+          parsedMetadata.house_ids = raw.house_ids
+            .map(id => parseInt(id, 10))
+            .filter(id => Number.isFinite(id) && id > 0);
         }
       }
 

@@ -27,4 +27,31 @@ const registrationLimiter = rateLimit({
     message: { success: false, error: 'Too many registration attempts. Please try again later.' },
 });
 
-module.exports = { loginLimiter, passwordResetLimiter, registrationLimiter };
+// Limiter for token refresh — 30 refreshes per 15 minutes per IP
+const refreshLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many token refresh requests. Please try again later.' },
+});
+
+// Limiter for registration token validation — prevents brute-force enumeration
+const validateTokenLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many validation attempts. Please try again later.' },
+});
+
+// Limiter for account link check — prevents account enumeration
+const checkLinkLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many requests. Please try again later.' },
+});
+
+module.exports = { loginLimiter, passwordResetLimiter, registrationLimiter, refreshLimiter, validateTokenLimiter, checkLinkLimiter };
