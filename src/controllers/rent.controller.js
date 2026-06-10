@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const { hasPermission } = require('../services/permission.service');
 const { parsePagination } = require('../utils/pagination');
+const CaretakerPermissionService = require('../services/CaretakerPermission.service');
 
 class RenterController {
 
@@ -106,9 +107,10 @@ class RenterController {
                 const hOId = parseInt(houseOwnerId, 10);
                 
                 if (userRole === 'caretaker') {
-                    const accessibleOwners = await this.getAccessibleHouseOwners(userId);
-                    // Ensure accessibleOwners is an array of IDs
-                    if (!accessibleOwners.includes(hOId)) {
+                    const ownerHouses = await db('house').where('ownerId', hOId).select('id');
+                    const ownerHouseIds = ownerHouses.map(h => h.id);
+                    const allowedHouseIds = await CaretakerPermissionService.getHousesWithPermission(userId, ownerHouseIds, 'renters.create');
+                    if (allowedHouseIds.length === 0) {
                         return res.status(403).json({ success: false, error: 'No access to this house owner||এই বাড়ির মালিকের অ্যাক্সেস নেই' });
                     }
                 }
@@ -248,6 +250,7 @@ class RenterController {
             const userId = req.user.id;
             const userRole = req.user.role?.slug;
             const permissions = req.user?.permissions || [];
+            
             const { page: pageNum, limit: limitNum, offset } = parsePagination(page, limit, 20);
             
             // Start building query
@@ -279,7 +282,7 @@ class RenterController {
                 query.where('renter.createdBy', userId);
             }
             else if (userRole === 'caretaker') {
-                const hasViewPermission = permissions.some(perm => perm === 'renters.view'); // singular, not 'renters'
+                const hasViewPermission = permissions.some(perm => perm === 'renters.view'); 
                 if (!hasViewPermission) { // fix condition - should be !hasViewPermission
                     return res.status(403).json({
                         success: false,
@@ -581,7 +584,7 @@ class RenterController {
             }
             
             // Check access permission
-            const hasAccess = await this.checkRenterAccess(userId, userRole, renter);
+            const hasAccess = req.user?.permissions?.some(perm => perm === 'renters.view');
             if (!hasAccess) {
                 return res.status(403).json({
                     success: false,
@@ -660,7 +663,7 @@ class RenterController {
             }
             
             // Check access permission
-            const hasAccess = await this.checkRenterAccess(userId, userRole, renter, 'renters.edit');
+            const hasAccess = req.user?.permissions?.some(perm => perm === 'renters.edit');
             if (!hasAccess) {
                 return res.status(403).json({
                     success: false,

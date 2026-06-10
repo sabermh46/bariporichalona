@@ -850,7 +850,7 @@ class FinancialController {
         hasAccess = await CaretakerPermissionService.hasCaretakerPermission(
           currentUser.id,
           payment.houseId,
-          "payments.update" // Ensure this permission exists or use payments.create
+          "payments.create" // Ensure this permission exists or use payments.create
         );
       }
 

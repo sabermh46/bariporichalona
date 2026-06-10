@@ -3,6 +3,8 @@ const PermissionService = require("../services/permission.service");
 const { serializeBigInt } = require("../utils/serializer");
 const db = require("../config/knex");
 const notificationController = require("./notification.controller");
+const notify = require("../services/inAppNotification.service");
+const pushService = require("../services/pushNotification.service");
 const path = require("path");
 const fs = require("fs");
 const { moveToPermanentLocation } = require("../utils/fileUpload");
@@ -175,11 +177,16 @@ class AuthController {
         } else if (typeof metadata === 'object' && !Array.isArray(metadata)) {
           raw = metadata;
         }
-        // Only house_ids is accepted from user input; everything else is system-assigned
         if (Array.isArray(raw.house_ids) && raw.house_ids.length > 0) {
           parsedMetadata.house_ids = raw.house_ids
             .map(id => parseInt(id, 10))
             .filter(id => Number.isFinite(id) && id > 0);
+        }
+        if (raw.house_owner_id) {
+          const ownerId = parseInt(raw.house_owner_id, 10);
+          if (Number.isFinite(ownerId) && ownerId > 0) {
+            parsedMetadata.house_owner_id = ownerId;
+          }
         }
       }
 
@@ -255,16 +262,17 @@ class AuthController {
   // Create user account (admin/staff/house_owner)
   async createUser(req, res) {
     try {
-      const { 
-        email, 
-        name, 
-        phone, 
-        roleSlug, 
+      const {
+        email,
+        name,
+        phone,
+        roleSlug,
         password,
         sendEmail,
         generateToken,
         houseLimit,
-        permissions 
+        permissions,
+        metadata
       } = req.body;
 
       const result = await AuthService.createUserAccount(req.user.id, {
@@ -272,7 +280,8 @@ class AuthController {
         name,
         phone,
         roleSlug,
-        password
+        password,
+        metadata: metadata || {}
       }, {
         sendEmail: sendEmail || false,
         generateToken: generateToken || false,
@@ -290,6 +299,71 @@ class AuthController {
         } catch (notifErr) {
           console.error("System notification (house owner create-user):", notifErr);
         }
+      }
+
+      if (result.user && result.user.role && result.user.role.slug === "caretaker" && metadata?.house_owner_id) {
+        const caretakerName = result.user.name || result.user.email;
+        const houseOwnerId = Number(metadata.house_owner_id);
+
+        // In-app notifications
+        notify.notifyUser(houseOwnerId, {
+          title: 'New Caretaker Added',
+          message: `${caretakerName} has been added as a caretaker for your properties.`,
+          type: 'success',
+          redirectLink: '/caretakers',
+        }).catch(e => console.error('[notify] caretaker create-user (owner):', e));
+
+        notify.notifyUser(result.user.id, {
+          title: 'Account Created',
+          message: 'Your caretaker account has been set up. You can now log in.',
+          type: 'info',
+          redirectLink: '/dashboard',
+        }).catch(e => console.error('[notify] caretaker create-user (caretaker):', e));
+
+        // Push notifications
+        pushService.sendToUser(
+          houseOwnerId,
+          'New Caretaker Added',
+          `${caretakerName} has been added as a caretaker for your properties.`,
+          { type: 'caretaker_added', url: '/caretakers' }
+        ).catch(e => console.error('[push] caretaker create-user (owner):', e));
+
+        pushService.sendToUser(
+          result.user.id,
+          'Account Created',
+          'Your caretaker account has been set up. You can now log in.',
+          { type: 'account_created', url: '/dashboard' }
+        ).catch(e => console.error('[push] caretaker create-user (caretaker):', e));
+      }
+
+      if (result.user && result.user.role && result.user.role.slug === "staff") {
+        const staffName = result.user.name || result.user.email;
+
+        // System notification for admins
+        try {
+          await notificationController.createSystemCommonNotification({
+            title: "New staff member added",
+            message: `${staffName} was added as a staff member.`,
+            redirectLink: `/admin/view/all-staff`,
+          });
+        } catch (notifErr) {
+          console.error("System notification (staff create-user):", notifErr);
+        }
+
+        // Welcome the new staff member
+        notify.notifyUser(result.user.id, {
+          title: 'Account Created',
+          message: 'Your staff account has been set up. You can now log in.',
+          type: 'info',
+          redirectLink: '/dashboard',
+        }).catch(e => console.error('[notify] staff create-user (staff):', e));
+
+        pushService.sendToUser(
+          result.user.id,
+          'Account Created',
+          'Your staff account has been set up. You can now log in.',
+          { type: 'account_created', url: '/dashboard' }
+        ).catch(e => console.error('[push] staff create-user (staff):', e));
       }
 
       res.json(serializeBigInt(result));

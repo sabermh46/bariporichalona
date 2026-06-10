@@ -11,7 +11,7 @@ const db = require('../config/knex');
 // Flat Management Routes
 router.get('/houses/:houseId/flats',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.getFlats
 );
 
@@ -25,25 +25,25 @@ router.post('/houses/:houseId/flats',
 
 router.get('/flats/:id',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.getFlatDetails
 );
 
 router.put('/flats/:id',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.updateFlat
 );
 
 router.delete('/flats/:id',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.deleteFlat
 );
 
 router.post('/flats/:id/renter',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.assignRenter
 );
 
@@ -67,14 +67,14 @@ router.delete('/flats/:flatId/advance-payments/:advanceId',
 
 router.delete('/flats/:id/renter',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     FlatController.removeRenter
 );
 
 // Flat Payment Routes
 router.get('/flats/:id/payments',
     authMiddleware,
-    roleMiddleware(['house_owner', 'staff', 'web_owner']),
+    roleMiddleware(['house_owner', 'staff', 'web_owner', 'caretaker']),
     async (req, res) => {
         try {
             const { id } = req.params;

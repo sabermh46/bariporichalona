@@ -107,6 +107,9 @@ async generateRegistrationToken(creatorId, options = {}) {
     metaData = {}
   } = options;
 
+  console.log(metaData);
+  
+
   // 1. New Logic: Check if email is already registered
   if (email) {
     const existingUser = await db('user')
@@ -522,7 +525,9 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
                             userId: userId,
                             permissionId: permission.id,
                             grantedBy: createdBy || userId,
-                            grantedAt: new Date()
+                            grantedAt: new Date(),
+                            revokedAt: null,
+                            revokedBy: null
                         });
                     }
                 }
@@ -619,7 +624,9 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
         name: userData.name || null,
         phone: userData.phone === "" ? null : userData.phone,
         roleId: targetRole.id,
-        parentId: creatorId,
+        parentId: (userData.roleSlug === 'caretaker' && userData.metadata?.house_owner_id)
+          ? userData.metadata.house_owner_id
+          : creatorId,
         needsPasswordSetup: false,
         locale: 'en',
         status: 'active',
@@ -633,6 +640,9 @@ async handleRoleSpecificData(trx, roleSlug, userId, metadata, createdBy) {
         createdAt: new Date(),
         updatedAt: new Date()
       });
+
+      // Handle role-specific setup (e.g. caretaker → caretakerassignment rows)
+      await this.handleRoleSpecificData(trx, userData.roleSlug, userId, userData.metadata || {}, creatorId);
 
       // If houseLimit specified, create or update role limit
       if (houseLimit !== null && ['house_owner', 'staff'].includes(userData.roleSlug)) {

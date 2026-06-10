@@ -148,32 +148,18 @@ class FlatController {
 
       // If not owner, check if user is a staff with caretaker assignment
       if (!hasAccess) {
-        // Check if user has the permission 'flat.create'
-        const hasFlatCreatePermission = await hasPermission(
-          "flat.create",
-          userId
+        const hasCaretakerAccess = await CaretakerPermissionService.hasCaretakerPermission(
+          userId, houseId, "flats.create"
         );
 
-        if (hasFlatCreatePermission) {
-          // Check if user is assigned as caretaker to this house
-          const caretakerAssignment = await db("caretakerassignment")
-            .where("houseId", houseId)
-            .andWhere("caretakerId", userId)
-            .andWhere("expiresAt", ">", new Date())
+        if (hasCaretakerAccess) {
+          house = await db("house")
+            .where("id", houseId)
+            .andWhere("active", true)
+            .select("*")
             .first();
 
-          if (caretakerAssignment) {
-            // Get house details
-            house = await db("house")
-              .where("id", houseId)
-              .andWhere("active", true)
-              .select("*")
-              .first();
-
-            if (house) {
-              hasAccess = true;
-            }
-          }
+          if (house) hasAccess = true;
         }
       }
 
@@ -259,31 +245,29 @@ class FlatController {
       const { page, limit, offset } = parsePagination(rawPage, rawLimit, 20);
 
       if (req.user.role.slug === "caretaker") {
-        // Check if caretaker has access to the specified house
-        const availableHouseOwner = await getAccessibleHouseOwners(userId);
-        if (availableHouseOwner.length === 0) {
+        const assignments = await db('caretakerassignment')
+          .where('caretakerId', userId)
+          .andWhere('expiresAt', '>', new Date())
+          .select('houseId');
+        const assignedHouseIds = assignments.map(a => a.houseId);
+
+        const allowedHouseIds = await CaretakerPermissionService.getHousesWithPermission(userId, assignedHouseIds, 'flats.view');
+
+        if (allowedHouseIds.length === 0) {
           return res.status(403).json({
             success: false,
             error: "No accessible houses found for this caretaker",
           });
-        } else {
-          const houseOwnerId = availableHouseOwner[0];
-          //get all houses for this owner
-          const houses = await db("house")
-            .where("ownerId", houseOwnerId)
-            .andWhere("active", true)
-            .select("id");
-            console.log('houses: ' , houses);
-
-          const houseIds = houses.map((h) => h.id);
-          if (house_id && !houseIds.includes(parseInt(house_id))) {
-            return res.status(403).json({
-              success: false,
-              error: "You do not have access to this house",
-            });
-          }
-            
         }
+
+        if (house_id && !allowedHouseIds.map(String).includes(String(house_id))) {
+          return res.status(403).json({
+            success: false,
+            error: "You do not have access to this house",
+          });
+        }
+
+        query.whereIn('flat.house_id', allowedHouseIds);
       }
 
       // Build base query
@@ -523,6 +507,11 @@ class FlatController {
           if (!hasPerm) {
             return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
           }
+        } else if (role === "caretaker") {
+          const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, flat.house_id, "flats.edit");
+          if (!hasPerm) {
+            return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
+          }
         } else {
           const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
           if (!hasAccess) {
@@ -594,6 +583,12 @@ class FlatController {
         if (role !== "web_owner") {
           if (role === "staff") {
             const hasPerm = await hasPermission(userId, "flats.delete");
+            if (!hasPerm) {
+              await trx.rollback();
+              return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
+            }
+          } else if (role === "caretaker") {
+            const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, flat.house_id, "flats.delete");
             if (!hasPerm) {
               await trx.rollback();
               return res.status(403).json({ success: false, error: "Permission denied||অনুমতি নেই" });
@@ -709,6 +704,11 @@ class FlatController {
         if (role !== 'web_owner') {
           if (role === 'staff') {
             const hasPerm = await hasPermission(userId, 'flats.assign');
+            if (!hasPerm) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
+            }
+          } else if (role === 'caretaker') {
+            const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, flat.house_id, 'flats.assign');
             if (!hasPerm) {
               return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি নেই' });
             }
@@ -1274,12 +1274,22 @@ class FlatController {
 
         // Check permission
         if (req.user.role.slug !== 'web_owner') {
-          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
-          if (!hasAccess) {
-            return res.status(403).json({
-              success: false,
-              error: 'You do not have permission',
-            });
+          if (req.user.role.slug === 'caretaker') {
+            const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, flat.house_id, 'flats.view');
+            if (!hasPerm) {
+              return res.status(403).json({
+                success: false,
+                error: 'You do not have permission',
+              });
+            }
+          } else {
+            const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+            if (!hasAccess) {
+              return res.status(403).json({
+                success: false,
+                error: 'You do not have permission',
+              });
+            }
           }
         }
 
@@ -1319,9 +1329,16 @@ class FlatController {
         }
 
         if (req.user.role.slug !== 'web_owner') {
-          const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
-          if (!hasAccess) {
-            return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+          if (req.user.role.slug === 'caretaker') {
+            const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, flat.house_id, 'flats.edit');
+            if (!hasPerm) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+            }
+          } else {
+            const hasAccess = await this.checkFlatAccess(userId, flat.house_id);
+            if (!hasAccess) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+            }
           }
         }
 
@@ -1414,9 +1431,16 @@ class FlatController {
         }
 
         if (req.user.role.slug !== 'web_owner') {
-          const hasAccess = await this.checkFlatAccess(userId, advance.house_id);
-          if (!hasAccess) {
-            return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+          if (req.user.role.slug === 'caretaker') {
+            const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, advance.house_id, 'flats.edit');
+            if (!hasPerm) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+            }
+          } else {
+            const hasAccess = await this.checkFlatAccess(userId, advance.house_id);
+            if (!hasAccess) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+            }
           }
         }
 
@@ -1486,9 +1510,16 @@ class FlatController {
         }
 
         if (req.user.role.slug !== 'web_owner') {
-          const hasAccess = await this.checkFlatAccess(userId, advance.house_id);
-          if (!hasAccess) {
-            return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+          if (req.user.role.slug === 'caretaker') {
+            const hasPerm = await CaretakerPermissionService.hasCaretakerPermission(userId, advance.house_id, 'flats.delete');
+            if (!hasPerm) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+            }
+          } else {
+            const hasAccess = await this.checkFlatAccess(userId, advance.house_id);
+            if (!hasAccess) {
+              return res.status(403).json({ success: false, error: 'Permission denied||অনুমতি প্রদান করা হয়নি' });
+            }
           }
         }
 

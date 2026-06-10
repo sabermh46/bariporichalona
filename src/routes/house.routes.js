@@ -145,7 +145,7 @@ router.get('/owners/managed', async (req, res, next) => {
         
         // For staff, check permission first
         if (userRole === 'staff') {
-            const hasPerm = await hasPermission(userId, 'houses.view');
+            const hasPerm = await PermissionService.hasPermission(userId, 'houses.view');
             if (!hasPerm) {
                 return res.status(403).json({
                     success: false,

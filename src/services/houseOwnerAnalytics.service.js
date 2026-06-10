@@ -83,6 +83,7 @@ class HouseOwnerAnalyticsService {
       },
       rentCollectionProgress: [],
       upcomingPayments: [],
+      overduePayments: [],
       charts: {
         monthlyRentCollection: [],
         rentCollectionByHouse: [],

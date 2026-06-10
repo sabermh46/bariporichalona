@@ -122,18 +122,19 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
     .select('u.id', 'u.name')
     .distinct('u.id');
   
-  // Get upcoming payments (next 30 days)
-  const thirtyDaysFromNow = new Date();
-  thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-  
+  // Get upcoming payments (today to end of current month)
+  const endOfMonth = new Date();
+  endOfMonth.setMonth(endOfMonth.getMonth() + 1, 0); // last day of current month
+  endOfMonth.setHours(23, 59, 59, 999);
+
   const upcomingPayments = await db('rent_payment as rp')
     .join('flat', 'rp.flat_id', 'flat.id')
     .join('house', 'rp.house_id', 'house.id')
     .join('renter', 'rp.renter_id', 'renter.id')
     .whereIn('rp.house_id', houseIds)
     .andWhere('rp.status', 'pending')
-    .andWhere('rp.due_date', '<=', thirtyDaysFromNow)
-    .andWhere('rp.due_date', '>=', new Date())
+    .andWhere('rp.due_date', '<=', endOfMonth)
+    .andWhere(db.raw('rp.due_date >= CURDATE()'))
     .select(
       'rp.id',
       'rp.amount',
@@ -145,6 +146,29 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
       'renter.name as renter_name',
       'renter.phone as renter_phone',
       db.raw('DATEDIFF(rp.due_date, CURDATE()) as days_left')
+    )
+    .orderBy('rp.due_date', 'asc')
+    .limit(100);
+
+  // Get overdue payments (due_date before today, still pending/overdue)
+  const overduePayments = await db('rent_payment as rp')
+    .join('flat', 'rp.flat_id', 'flat.id')
+    .join('house', 'rp.house_id', 'house.id')
+    .join('renter', 'rp.renter_id', 'renter.id')
+    .whereIn('rp.house_id', houseIds)
+    .whereIn('rp.status', ['pending', 'overdue'])
+    .andWhere(db.raw('rp.due_date < CURDATE()'))
+    .select(
+      'rp.id',
+      'rp.amount',
+      'rp.due_date',
+      'flat.number as flat_number',
+      'flat.name as flat_name',
+      'flat.id as flat_id',
+      'house.name as house_name',
+      'renter.name as renter_name',
+      'renter.phone as renter_phone',
+      db.raw('DATEDIFF(CURDATE(), rp.due_date) as days_overdue')
     )
     .orderBy('rp.due_date', 'asc')
     .limit(100);
@@ -367,6 +391,24 @@ const computeHouseOwnerDashboard = async (houseOwnerId, months = 12) => {
       amount: payment.amount,
       due_date: payment.due_date,
       days_left: payment.days_left,
+      flat: {
+        number: payment.flat_number,
+        name: payment.flat_name,
+        id: payment.flat_id
+      },
+      house: {
+        name: payment.house_name
+      },
+      renter: {
+        name: payment.renter_name,
+        phone: payment.renter_phone
+      }
+    })),
+    overduePayments: overduePayments.map(payment => ({
+      id: payment.id,
+      amount: payment.amount,
+      due_date: payment.due_date,
+      days_overdue: payment.days_overdue,
       flat: {
         number: payment.flat_number,
         name: payment.flat_name,

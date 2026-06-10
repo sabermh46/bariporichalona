@@ -3,6 +3,8 @@ const db = require('../config/knex');
 const path = require('path');
 const fs = require('fs');
 const mime = require('mime-types');
+const { hasPermission } = require('../services/permission.service');
+const CaretakerPermissionService = require('../services/CaretakerPermission.service');
 
 class ImageController {
   // Serve protected images
@@ -48,20 +50,16 @@ class ImageController {
           .first();
         
         if (renter) {
-          if (userRole === 'house_owner' && renter.createdBy === userId) {
+          if (userRole === 'house_owner' && String(renter.createdBy) === String(userId)) {
             hasAccess = true;
           } else if (userRole === 'staff') {
-            // Check staff access (simplified - implement your full permission logic here)
-            const assignment = await db('caretakerassignment')
-              .join('flat', 'caretakerassignment.houseId', 'flat.house_id')
-              .where('caretakerassignment.caretakerId', userId)
-              .andWhere('flat.renter_id', renterId)
-              .andWhere('caretakerassignment.expiresAt', '>', new Date())
-              .first();
-            
-            if (assignment) {
-              hasAccess = true;
-            }
+            hasAccess = await hasPermission(userId, 'renters.view');
+          } else if (userRole === 'caretaker') {
+            const ownerHouses = await db('house').where('ownerId', renter.createdBy).select('id');
+            const ownerHouseIds = ownerHouses.map(h => h.id);
+            const allowed = await CaretakerPermissionService.getHousesWithPermission(userId, ownerHouseIds, 'renters.view');
+            console.log(allowed + ' allowed');
+            hasAccess = allowed;
           }
         }
       }
