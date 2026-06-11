@@ -1,6 +1,7 @@
 // controllers/admin/staffPermission.controller.js
 const db = require("../../config/knex");
 const permissionService = require("../../services/permission.service");
+const audit = require("../../services/audit.service");
 
 class StaffPermissionController {
 
@@ -391,6 +392,16 @@ class StaffPermissionController {
                 }
             }
 
+            audit.fromRequest(req, {
+                entityType: 'staffpermission',
+                entityId: staffId,
+                action: 'permission_grant',
+                actionCategory: 'permission',
+                changes: { after: { granted: permissionIds } },
+                metadata: { source: 'service', grantedCount: results.length, failedCount: errors.length },
+                status: errors.length && !results.length ? 'failure' : 'success',
+            });
+
             res.json({
                 success: true,
                 message: `Granted ${results.length} permissions, ${errors.length} failed`,
@@ -439,6 +450,16 @@ class StaffPermissionController {
                     });
                 }
             }
+
+            audit.fromRequest(req, {
+                entityType: 'staffpermission',
+                entityId: staffId,
+                action: 'permission_revoke',
+                actionCategory: 'permission',
+                changes: { before: { revoked: permissionIds } },
+                metadata: { source: 'service', revokedCount: results.length, failedCount: errors.length },
+                status: errors.length && !results.length ? 'failure' : 'success',
+            });
 
             res.json({
                 success: true,
@@ -571,6 +592,16 @@ class StaffPermissionController {
                 .where({ id: BigInt(staffId) })
                 .select('id', 'email', 'name', 'status', 'updatedAt')
                 .first();
+
+            audit.fromRequest(req, {
+                entityType: 'user',
+                entityId: staffId,
+                action: 'status_change',
+                actionCategory: 'permission',
+                reason: reason || null,
+                changes: audit.diff({ status: staff.status }, { status }),
+                metadata: { source: 'service' },
+            });
 
             res.json({
                 success: true,
@@ -731,6 +762,14 @@ class StaffPermissionController {
                     });
                 }
             }
+
+            audit.fromRequest(req, {
+                entityType: 'staffpermission',
+                entityId: targetStaffId,
+                action: 'permission_copy',
+                actionCategory: 'permission',
+                metadata: { source: 'service', sourceStaffId, targetStaffId, copied: results, failedCount: errors.length },
+            });
 
             res.json({
                 success: true,

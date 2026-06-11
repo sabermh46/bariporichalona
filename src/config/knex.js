@@ -12,8 +12,12 @@ const config = {
     charset: 'utf8mb4',
   },
   pool: {
-    min: 2,
-    max: 20,
+    min: parseInt(process.env.DB_POOL_MIN, 10) || 2,
+    max: parseInt(process.env.DB_POOL_MAX, 10) || 10,
+    acquireTimeoutMillis: parseInt(process.env.DB_POOL_ACQUIRE_TIMEOUT, 10) || 30000,
+    createTimeoutMillis: parseInt(process.env.DB_POOL_CREATE_TIMEOUT, 10) || 30000,
+    idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT, 10) || 30000,
+    reapIntervalMillis: parseInt(process.env.DB_POOL_REAP_INTERVAL, 10) || 1000,
   },
   migrations: {
     tableName: 'knex_migrations',

@@ -2,11 +2,13 @@ require("dotenv").config();
 const { version } = require('./package.json');
 const express = require("express");
 const helmet = require("helmet");
+const compression = require("compression");
 const cors = require("cors");
 const passport = require("passport");
 const bodyParser = require("body-parser");
 const app = express();
 const port = process.env.PORT || 8080;
+let shuttingDown = false;
 const session = require("express-session");
 const cookieParser = require("cookie-parser");
 const pushRoutes = require("./src/routes/push.routes");
@@ -17,13 +19,17 @@ const path = require("path");
 require("./src/config/passport");
 const { bigIntSerializer } = require("./src/utils/serializer");
 const { subscriptionMiddleware } = require("./src/middleware/subscriptionMiddleware");
+const auditLogMiddleware = require("./src/middleware/auditLog.middleware");
+const db = require("./src/config/knex");
 
 app.set("trust proxy", 1);
 app.use(helmet());
+app.use(compression());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser());
 app.use(bigIntSerializer);
+app.use(auditLogMiddleware);
 const allowedOrigins = [
   "http://localhost:3005",
   "http://localhost:4173",
@@ -61,9 +67,22 @@ app.use(
   })
 );
 app.use(passport.initialize());
-app.use(passport.session()); 
+app.use(passport.session());
 
+// --- Health checks (no auth, cheap) ---
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
 
+app.get("/health/ready", async (req, res) => {
+  if (shuttingDown) return res.status(503).json({ status: "shutting-down" });
+  try {
+    await db.raw("SELECT 1");
+    res.json({ status: "ready", db: "up" });
+  } catch (err) {
+    res.status(503).json({ status: "not-ready", db: "down", error: err.message });
+  }
+});
 
 
 const authRoute = require("./src/routes/auth.routes");
@@ -124,6 +143,7 @@ app.use("/push", pushRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/cache', apiCacheRoutes);
 app.use('/admin/permissions', staffPermissionRoutes);
+app.use('/admin/audit-logs', require('./src/routes/admin/auditLog.routes'));
 app.use('/houses', houseRoutes);
 app.use('/admin/system-settings', systemPermissionRoutes);
 app.use('/analytics', analyticsRoutes);
@@ -150,4 +170,73 @@ app.get("/", (req, res) => {
 
 landingPageService.initialize();
 
-app.listen(port,()=> console.log(`lISTENING TO PORT ${port}`))
+const server = app.listen(port, () => console.log(`lISTENING TO PORT ${port}`));
+
+// --- Unified graceful shutdown ---
+// Single owner of process.exit(). The analytics services' own SIGTERM/SIGINT
+// handlers no longer call process.exit (see analytics.service.js / houseOwnerAnalytics.service.js);
+// they only run their idempotent shutdown(), which we also invoke here.
+const audit = require('./src/services/audit.service');
+const emailService = require('./src/services/email.service');
+const { getEmailWorkerPool } = require('./src/utils/emailWorkerPool');
+const analyticsService = require('./src/services/analytics.service');
+const houseOwnerAnalyticsService = require('./src/services/houseOwnerAnalytics.service');
+
+const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 15000;
+const EMAIL_DRAIN_TIMEOUT_MS = parseInt(process.env.EMAIL_DRAIN_TIMEOUT_MS, 10) || 5000;
+
+async function drainEmailQueue(deadline) {
+  try {
+    while (Date.now() < deadline) {
+      const s = emailService.getQueueStats();
+      if (s.queued === 0 && s.processing === 0) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  } catch (_) { /* best-effort */ }
+}
+
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — draining...`);
+
+  const forceTimer = setTimeout(() => {
+    console.error('[shutdown] timeout exceeded — forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  if (forceTimer.unref) forceTimer.unref();
+
+  // 1. Stop accepting new connections; wait for in-flight requests.
+  await new Promise((resolve) =>
+    server.close((err) => {
+      if (err) console.error('[shutdown] server.close error:', err.message);
+      resolve();
+    })
+  );
+  console.log('[shutdown] HTTP server closed');
+
+  // 2. Best-effort drain of queued/in-flight emails.
+  await drainEmailQueue(Date.now() + EMAIL_DRAIN_TIMEOUT_MS);
+
+  // 3. Flush buffered audit rows.
+  try { await audit.shutdown(); } catch (e) { console.error('[shutdown] audit:', e.message); }
+
+  // 4. Terminate worker pools.
+  await Promise.allSettled([
+    getEmailWorkerPool().terminate(),
+    analyticsService.shutdown(),
+    houseOwnerAnalyticsService.shutdown(),
+  ]);
+  console.log('[shutdown] worker pools terminated');
+
+  // 5. Destroy knex pool LAST (drain/flush steps may hit DB).
+  try { await db.destroy(); console.log('[shutdown] knex pool destroyed'); }
+  catch (e) { console.error('[shutdown] db.destroy error:', e.message); }
+
+  clearTimeout(forceTimer);
+  console.log('[shutdown] complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

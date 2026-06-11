@@ -466,6 +466,32 @@ model emaillog {
   @@index([table_name, row_id], map: "EmailLog_table_row_idx")
 }
 
+model auditlog {
+  id             BigInt    @id @default(autoincrement())
+  uuid           String    @unique(map: "AuditLog_uuid_key") @db.VarChar(36)
+  actorId        BigInt?
+  actorRole      String?   @db.VarChar(50)
+  actorName      String?   @db.VarChar(150)
+  actorEmail     String?   @db.VarChar(255)
+  entityType     String    @db.VarChar(64)
+  entityId       String?   @db.VarChar(64)
+  action         String    @db.VarChar(64)
+  actionCategory String    @db.VarChar(32)
+  changes        String?   @db.LongText
+  reason         String?   @db.Text
+  metadata       String?   @db.LongText
+  ipAddress      String?   @db.VarChar(45)
+  userAgent      String?   @db.VarChar(512)
+  status         String    @default("success") @db.VarChar(20)
+  createdAt      DateTime  @default(now())
+
+  @@index([actorId, createdAt], map: "AuditLog_actor_createdAt_idx")
+  @@index([entityType, entityId], map: "AuditLog_entity_idx")
+  @@index([action], map: "AuditLog_action_idx")
+  @@index([actionCategory], map: "AuditLog_category_idx")
+  @@index([createdAt], map: "AuditLog_createdAt_idx")
+}
+
 model rolepermission {
   id           BigInt     @id @default(autoincrement())
   roleId       BigInt

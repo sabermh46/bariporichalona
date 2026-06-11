@@ -5,6 +5,7 @@ const db = require("../config/knex");
 const notificationController = require("./notification.controller");
 const notify = require("../services/inAppNotification.service");
 const pushService = require("../services/pushNotification.service");
+const audit = require("../services/audit.service");
 const path = require("path");
 const fs = require("fs");
 const { moveToPermanentLocation } = require("../utils/fileUpload");
@@ -52,8 +53,30 @@ class AuthController {
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
 
+      audit.fromRequest(req, {
+        actorId: data.user?.id,
+        actorRole: data.user?.role?.slug,
+        actorName: data.user?.name,
+        actorEmail: data.user?.email,
+        entityType: 'user',
+        entityId: data.user?.id,
+        action: 'login',
+        actionCategory: 'auth',
+        metadata: { source: 'service' },
+      });
+
       res.json(serializeBigInt(responseData));
     } catch (err) {
+      audit.fromRequest(req, {
+        actorRole: 'anonymous',
+        actorEmail: req.body?.email || null,
+        entityType: 'user',
+        entityId: req.body?.email || null,
+        action: 'login_failed',
+        actionCategory: 'auth',
+        status: 'failure',
+        metadata: { source: 'service', reason: err.message },
+      });
       res.status(400).json({ error: err.message });
     }
   };
@@ -123,11 +146,19 @@ class AuthController {
             const userId = req.user.id;
             
             const result = await AuthService.changePassword(userId, oldPassword, newPassword);
-            
+
             if (!result.success) {
                 return res.status(400).json(result);
             }
-            
+
+            audit.fromRequest(req, {
+                entityType: 'user',
+                entityId: userId,
+                action: 'password_change',
+                actionCategory: 'auth',
+                metadata: { source: 'service' },
+            });
+
             res.json(result);
         } catch (error) {
             next(error);
@@ -366,6 +397,14 @@ class AuthController {
         ).catch(e => console.error('[push] staff create-user (staff):', e));
       }
 
+      audit.fromRequest(req, {
+        entityType: 'user',
+        entityId: result.user?.id,
+        action: 'create',
+        actionCategory: 'user_mgmt',
+        metadata: { source: 'service', roleSlug: result.user?.role?.slug, email: result.user?.email },
+      });
+
       res.json(serializeBigInt(result));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -376,9 +415,18 @@ class AuthController {
   async loginAs(req, res) {
     try {
       const { targetUserId, reason } = req.body;
-      
+
       const result = await AuthService.loginAs(req.user.id, targetUserId, reason);
-      
+
+      audit.fromRequest(req, {
+        entityType: 'user',
+        entityId: targetUserId,
+        action: 'login_as',
+        actionCategory: 'auth',
+        reason: reason || null,
+        metadata: { source: 'service', originalUserId: req.user.id },
+      });
+
       res.json(serializeBigInt(result));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -389,9 +437,17 @@ class AuthController {
   async exitLoginAs(req, res) {
     try {
       const { sessionId } = req.body;
-      
+
       const result = await AuthService.exitLoginAs(sessionId, req.user.id);
-      
+
+      audit.fromRequest(req, {
+        entityType: 'user',
+        entityId: req.user.id,
+        action: 'login_as_exit',
+        actionCategory: 'auth',
+        metadata: { source: 'service', sessionId },
+      });
+
       res.json(serializeBigInt(result));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -450,7 +506,15 @@ class AuthController {
       const { tokenId } = req.params;
       
       const result = await AuthService.revokeRegistrationToken(tokenId, req.user.id);
-      
+
+      audit.fromRequest(req, {
+        entityType: 'registrationtoken',
+        entityId: tokenId,
+        action: 'revoke',
+        actionCategory: 'user_mgmt',
+        metadata: { source: 'service' },
+      });
+
       res.json(serializeBigInt(result));
     } catch (err) {
       res.status(400).json({ error: err.message });

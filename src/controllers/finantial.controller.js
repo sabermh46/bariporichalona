@@ -7,6 +7,7 @@ const NotificationService = require('../services/emailSmsNotification.service');
 const notify = require('../services/inAppNotification.service');
 const CaretakerPermissionService = require('../services/CaretakerPermission.service');
 const permissionService = require('../services/permission.service');
+const audit = require('../services/audit.service');
 const { serializeBigInt } = require('../utils/serializer');
 const AppFeePaymentController = require('./appFeePayment.controller');
 const FinancialService = require('../services/financial.service');
@@ -750,6 +751,15 @@ class FinancialController {
 
         await trx.commit();
 
+        audit.fromRequest(req, {
+          entityType: 'rent_payment',
+          entityId: paymentId,
+          action: 'create',
+          actionCategory: 'financial',
+          changes: { after: { totalAmount, status: finalStatus, flat_id, house_id: flat.house_id } },
+          metadata: { source: 'service', action: currentPayment ? 'payment_recorded' : 'pending_due_created' },
+        });
+
         // Notify house owner + caretakers when actual money was collected
         if (finalStatus === 'paid' || finalStatus === 'partial') {
           const amountStr = `৳${Number(totalAmount).toLocaleString()}`;
@@ -897,6 +907,18 @@ class FinancialController {
       // Fetch updated record
       const updatedPayment = await db("rent_payment").where("id", id).first();
 
+      audit.fromRequest(req, {
+        entityType: 'rent_payment',
+        entityId: id,
+        action: 'update',
+        actionCategory: 'financial',
+        changes: audit.diff(
+          { paid_amount: payment.paid_amount, status: payment.status, payment_method: payment.payment_method },
+          { paid_amount: updatedPayment.paid_amount, status: updatedPayment.status, payment_method: updatedPayment.payment_method }
+        ),
+        metadata: { source: 'service', houseId: payment.houseId },
+      });
+
       return res.json({
         success: true,
         message: "Rent payment updated successfully||ভাড়া পেমেন্ট সফলভাবে আপডেট হয়েছে",
@@ -947,6 +969,15 @@ class FinancialController {
       }
 
       await db("rent_payment").where("id", id).delete();
+
+      audit.fromRequest(req, {
+        entityType: 'rent_payment',
+        entityId: id,
+        action: 'delete',
+        actionCategory: 'financial',
+        changes: { before: { id: payment.id, houseId: payment.houseId, ownerId: payment.ownerId } },
+        metadata: { source: 'service' },
+      });
 
       return res.json({ success: true, message: "Payment deleted successfully||পেমেন্ট সফলভাবে মুছে ফেলা হয়েছে" });
     } catch (error) {

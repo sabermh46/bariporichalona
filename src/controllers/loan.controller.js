@@ -1,6 +1,7 @@
 const { v4: uuid } = require("uuid");
 const db = require("../config/knex");
 const { serializeBigInt } = require("../utils/serializer");
+const audit = require("../services/audit.service");
 
 /**
  * Controller for handling Loan Management operations.
@@ -71,8 +72,17 @@ class LoanController {
             };
 
             const [loanId] = await db('house_loan').insert(loanData);
-            
+
             const newLoan = await db('house_loan').where('id', loanId).first();
+
+            audit.fromRequest(req, {
+                entityType: 'house_loan',
+                entityId: loanId,
+                action: 'create',
+                actionCategory: 'financial',
+                changes: { after: { house_id, provider_name, amount, monthly_payment } },
+                metadata: { source: 'service' },
+            });
 
             res.status(201).json({
                 success: true,
@@ -248,6 +258,15 @@ class LoanController {
 
             await db('house_loan').where('id', loanId).del();
             await db('house_loan_payment').where('loan_id', loanId).del();
+
+            audit.fromRequest(req, {
+                entityType: 'house_loan',
+                entityId: loanId,
+                action: 'delete',
+                actionCategory: 'financial',
+                changes: { before: { provider_name: loan.provider_name, amount: loan.amount, house_id: loan.house_id } },
+                metadata: { source: 'service', cascadedPayments: true },
+            });
 
             res.json({
                 success: true,

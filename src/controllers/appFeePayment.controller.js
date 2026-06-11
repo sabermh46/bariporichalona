@@ -85,15 +85,10 @@ class AppFeePaymentController {
     }
 
     // App fee status for middleware & UI: expiry, grace, block
-    async getAppFeeStatus(houseOwnerId) {
-        const lastPaid = await db("app_fee_payment")
-            .where("house_owner_id", houseOwnerId)
-            .andWhere("status", "paid")
-            .whereNotNull("paid_date")
-            .whereNull("deleted_at")
-            .orderBy("paid_date", "desc")
-            .select("id", "paid_date", "subscription_days", "offset_days", "house_count", "amount")
-            .first();
+    // Pure date-math: derive the fee status from an already-fetched "last paid"
+    // record (or null). Shared by getAppFeeStatus (single owner) and getPayments
+    // (batched), so neither re-derives the logic.
+    computeAppFeeStatusFromLastPaid(lastPaid) {
         if (!lastPaid) {
             return {
                 isActive: false,
@@ -124,6 +119,18 @@ class AppFeePaymentController {
             lastPaidPayment: lastPaid,
             canCreatePayment: !isBlocked,
         };
+    }
+
+    async getAppFeeStatus(houseOwnerId) {
+        const lastPaid = await db("app_fee_payment")
+            .where("house_owner_id", houseOwnerId)
+            .andWhere("status", "paid")
+            .whereNotNull("paid_date")
+            .whereNull("deleted_at")
+            .orderBy("paid_date", "desc")
+            .select("id", "paid_date", "subscription_days", "offset_days", "house_count", "amount")
+            .first();
+        return this.computeAppFeeStatusFromLastPaid(lastPaid || null);
     }
 
     // Calculate due amount for house owner (one record per owner, house_count = active houses)
@@ -1124,25 +1131,53 @@ class AppFeePaymentController {
                 .limit(limit)
                 .offset(offset);
             
-            // Get house count for each house owner
-            const paymentsWithDetails = await Promise.all(
-                payments.map(async (payment) => {
-                    const activeCount = await db('house')
-                        .where('ownerId', payment.house_owner_id)
-                        .andWhere('active', true)
-                        .count('id as count')
-                        .first()
-                        .then((r) => parseInt(r.count, 10) || 0);
-                    const status = await this.getAppFeeStatus(payment.house_owner_id);
-                    return {
-                        ...payment,
-                        house_owner_active_houses: activeCount,
-                        expected_amount: this.getAmountForHouseCount(payment.house_count),
-                        appFeeStatus: status,
-                        metadata: payment.metadata ? JSON.parse(payment.metadata) : null
-                    };
-                })
+            // Batch the per-owner lookups instead of running ~2 queries per row.
+            const ownerIds = [...new Set(payments.map((p) => p.house_owner_id).filter((v) => v != null))];
+
+            // 1) active-house counts grouped by owner (one query)
+            const houseCountRows = ownerIds.length
+                ? await db('house')
+                    .whereIn('ownerId', ownerIds)
+                    .andWhere('active', true)
+                    .groupBy('ownerId')
+                    .select('ownerId')
+                    .count('id as count')
+                : [];
+            const activeCountByOwner = new Map(
+                houseCountRows.map((r) => [String(r.ownerId), parseInt(r.count, 10) || 0])
             );
+
+            // 2) latest "paid" record per owner for fee status (one query; keep first per owner)
+            const paidRows = ownerIds.length
+                ? await db('app_fee_payment')
+                    .whereIn('house_owner_id', ownerIds)
+                    .andWhere('status', 'paid')
+                    .whereNotNull('paid_date')
+                    .whereNull('deleted_at')
+                    .orderBy('house_owner_id')
+                    .orderBy('paid_date', 'desc')
+                    .select('house_owner_id', 'id', 'paid_date', 'subscription_days', 'offset_days', 'house_count', 'amount')
+                : [];
+            const lastPaidByOwner = new Map();
+            for (const row of paidRows) {
+                const k = String(row.house_owner_id);
+                if (!lastPaidByOwner.has(k)) {
+                    const { house_owner_id, ...rest } = row; // keep shape identical to getAppFeeStatus select
+                    lastPaidByOwner.set(k, rest);
+                }
+            }
+
+            // 3) rebuild synchronously
+            const paymentsWithDetails = payments.map((payment) => {
+                const k = String(payment.house_owner_id);
+                return {
+                    ...payment,
+                    house_owner_active_houses: activeCountByOwner.get(k) || 0,
+                    expected_amount: this.getAmountForHouseCount(payment.house_count),
+                    appFeeStatus: this.computeAppFeeStatusFromLastPaid(lastPaidByOwner.get(k) || null),
+                    metadata: payment.metadata ? JSON.parse(payment.metadata) : null
+                };
+            });
             
             return res.json({
                 success: true,

@@ -277,34 +277,46 @@ class CaretakerController {
 
       // Get all possible caretaker permissions
       const allPermissions = await this.getAllCaretakerPermissions();
-      // Get permissions for each assignment
-      const assignmentsWithPermissions = await Promise.all(
-        assignments.map(async (assignment) => {
-          const permissions = await db("caretakerassignmentpermission as cap")
-            .where("cap.caretakerAssignmentId", assignment.assignmentId)
+
+      // Batch: fetch every assignment's permissions + grantor in ONE query
+      // instead of (assignments × permissions) round-trips.
+      const assignmentIds = assignments.map((a) => a.assignmentId);
+      const permRows = assignmentIds.length
+        ? await db("caretakerassignmentpermission as cap")
+            .whereIn("cap.caretakerAssignmentId", assignmentIds)
             .whereNull("cap.revokedAt")
             .join("permission as p", "cap.permissionId", "p.id")
+            .leftJoin("user as gb", "cap.grantedBy", "gb.id")
             .select(
+              "cap.caretakerAssignmentId",
               "p.id",
               "p.key",
               "p.description",
               "cap.grantedAt",
-              "cap.grantedBy"
-            );
+              "cap.grantedBy",
+              "gb.id as grantor_id",
+              "gb.name as grantor_name",
+              "gb.email as grantor_email"
+            )
+        : [];
 
-          // Add grantedBy user info
-          const permissionsWithGrantor = await Promise.all(
-            permissions.map(async (perm) => {
-              const grantor = await db("user")
-                .where("id", perm.grantedBy)
-                .select("name", "email")
-                .first();
-              return {
-                ...perm,
-                grantedByUser: grantor,
-              };
-            })
-          );
+      const permsByAssignment = new Map();
+      for (const r of permRows) {
+        const k = String(r.caretakerAssignmentId);
+        if (!permsByAssignment.has(k)) permsByAssignment.set(k, []);
+        permsByAssignment.get(k).push({
+          id: r.id,
+          key: r.key,
+          description: r.description,
+          grantedAt: r.grantedAt,
+          grantedBy: r.grantedBy,
+          // Mirror the old `.first()` semantics: undefined when no grantor row.
+          grantedByUser: r.grantor_id == null ? undefined : { name: r.grantor_name, email: r.grantor_email },
+        });
+      }
+
+      const assignmentsWithPermissions = assignments.map((assignment) => {
+          const permissionsWithGrantor = permsByAssignment.get(String(assignment.assignmentId)) || [];
 
           // Format permissions with checked status
           const formattedPermissions = allPermissions?.all?.map(permission => {
@@ -340,8 +352,7 @@ class CaretakerController {
               active: Boolean(assignment.houseActive),
             },
           };
-        })
-      );
+        });
 
       // Get expired assignments count
       const expiredCount = await db("caretakerassignment")

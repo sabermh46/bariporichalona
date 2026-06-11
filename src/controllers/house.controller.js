@@ -1376,46 +1376,59 @@ class HouseController {
         });
       }
 
-      // Get house details with permissions for each house
-      const housesWithPermissions = await Promise.all(
-        houseIds.map(async (houseId) => {
-          const house = await db("house as h")
-            .where("h.id", houseId)
-            .leftJoin("user as u", "h.ownerId", "u.id")
-            .select(
-              "h.id",
-              "h.uuid",
-              "h.name",
-              "h.address",
-              "h.flatCount",
-              "h.active",
-              "u.name as owner_name",
-              "u.email as owner_email"
-            )
-            .first();
+      // Batch: fetch all houses + all permissions in 2 queries instead of ~3 per house.
+      const houses = await db("house as h")
+        .whereIn("h.id", houseIds)
+        .leftJoin("user as u", "h.ownerId", "u.id")
+        .select(
+          "h.id",
+          "h.uuid",
+          "h.name",
+          "h.address",
+          "h.flatCount",
+          "h.active",
+          "u.name as owner_name",
+          "u.email as owner_email"
+        );
 
+      // Permission keys for this caretaker across all assigned houses (active
+      // assignments only), mirroring getCaretakerHousePermissions' filters.
+      const permRows = await db("caretakerassignment as ca")
+        .join("caretakerassignmentpermission as cap", "ca.id", "cap.caretakerAssignmentId")
+        .join("permission as p", "cap.permissionId", "p.id")
+        .where("ca.caretakerId", currentUser.id)
+        .whereIn("ca.houseId", houseIds)
+        .andWhere(function () {
+          this.where("ca.expiresAt", ">", new Date()).orWhereNull("ca.expiresAt");
+        })
+        .whereNull("cap.revokedAt")
+        .select("ca.houseId", "p.key");
+
+      const permsByHouse = new Map();
+      for (const r of permRows) {
+        const k = String(r.houseId);
+        if (!permsByHouse.has(k)) permsByHouse.set(k, []);
+        permsByHouse.get(k).push(r.key);
+      }
+
+      const housesById = new Map(houses.map((h) => [String(h.id), h]));
+
+      // Preserve original houseIds ordering and the null-house drop.
+      const filteredHouses = houseIds
+        .map((houseId) => {
+          const house = housesById.get(String(houseId));
           if (!house) return null;
-
-          // Get permissions for this house
-          const permissions = await CaretakerPermissionService.getCaretakerHousePermissions(
-            currentUser.id,
-            houseId
-          );
-
           return {
             ...house,
             active: Boolean(house.active),
-            permissions: permissions,
+            permissions: permsByHouse.get(String(houseId)) || [],
             owner: {
               name: house.owner_name,
               email: house.owner_email,
             },
           };
         })
-      );
-
-      // Filter out null houses
-      const filteredHouses = housesWithPermissions.filter(h => h !== null);
+        .filter((h) => h !== null);
 
       res.json({
         success: true,

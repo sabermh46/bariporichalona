@@ -304,17 +304,18 @@ class AnalyticsService {
 // Singleton instance
 const analyticsService = new AnalyticsService();
 
-// Cleanup on process exit
+// Cleanup on process exit. NOTE: process.exit() is intentionally NOT called here —
+// the unified graceful-shutdown coordinator in server.js owns process exit and
+// invokes analyticsService.shutdown() itself. These handlers remain only so the
+// service still drains cleanly if signalled directly.
 process.on('SIGTERM', async () => {
   console.log('Analytics service received SIGTERM, shutting down...');
   await analyticsService.shutdown();
-  process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   console.log('Analytics service received SIGINT, shutting down...');
   await analyticsService.shutdown();
-  process.exit(0);
 });
 
 // Handle uncaught errors

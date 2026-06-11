@@ -179,15 +179,15 @@ class HouseOwnerAnalyticsService {
 // Singleton instance
 const houseOwnerAnalyticsService = new HouseOwnerAnalyticsService();
 
-// Cleanup on process exit
+// Cleanup on process exit. NOTE: process.exit() is intentionally NOT called here —
+// the unified graceful-shutdown coordinator in server.js owns process exit and
+// invokes houseOwnerAnalyticsService.shutdown() itself.
 process.on('SIGTERM', async () => {
   await houseOwnerAnalyticsService.shutdown();
-  process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   await houseOwnerAnalyticsService.shutdown();
-  process.exit(0);
 });
 
 module.exports = houseOwnerAnalyticsService;
