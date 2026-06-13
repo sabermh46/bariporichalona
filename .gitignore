@@ -8,3 +8,9 @@ node_modules
 uploads/avatars/
 uploads/renters/
 uploads/pdfs/
+
+# Database backups & local backup config (never commit dumps or DB names/paths)
+db-backups/
+*.sql
+*.sql.gz
+scripts/backup.env
