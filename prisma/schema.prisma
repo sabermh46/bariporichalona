@@ -466,6 +466,32 @@ model emaillog {
   @@index([table_name, row_id], map: "EmailLog_table_row_idx")
 }
 
+// Durable email queue (outbox). The web process only INSERTs rows here; a cPanel
+// cron job (scripts/process-email-queue.js) drains and delivers them. This keeps
+// SMTP + PDF work out of the web process and makes delivery survive restarts.
+model email_outbox {
+  id              BigInt    @id @default(autoincrement())
+  to_email        String    @db.VarChar(255)
+  subject         String    @db.VarChar(255)
+  html            String?   @db.LongText
+  text            String?   @db.LongText
+  metadata        String?   @db.LongText // JSON: type, table_name, row_id, ...
+  attachments     String?   @db.LongText // JSON: [{ filename, content(base64) }]
+  status          String    @default("pending") @db.VarChar(20) // pending|processing|sent|failed
+  attempts        Int       @default(0)
+  max_attempts    Int       @default(3)
+  claim_token     String?   @db.VarChar(64)
+  last_error      String?   @db.Text
+  next_attempt_at DateTime?
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @default(now())
+  sent_at         DateTime?
+
+  @@index([status, next_attempt_at], map: "email_outbox_status_idx")
+  @@index([claim_token], map: "email_outbox_claim_idx")
+  @@index([created_at], map: "email_outbox_created_idx")
+}
+
 model auditlog {
   id             BigInt    @id @default(autoincrement())
   uuid           String    @unique(map: "AuditLog_uuid_key") @db.VarChar(36)

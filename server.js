@@ -167,6 +167,24 @@ app.get("/", (req, res) => {
   res.send("Server is running");
 });
 
+// --- Global error handler (MUST be last) ---
+// Express 5 forwards errors thrown in async handlers here, as do next(err) calls
+// (CORS rejection at the origin callback, body-parser JSON syntax errors, multer
+// errors). Centralizing this guarantees every error becomes a shaped response
+// instead of leaking out of the request lifecycle.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) {
+    console.error(`[error] ${req.method} ${req.originalUrl}:`, err);
+  }
+  if (res.headersSent) return next(err);
+  res.status(status).json({
+    success: false,
+    error: status >= 500 ? "Internal server error" : err.message,
+  });
+});
+
 
 landingPageService.initialize();
 
@@ -177,23 +195,15 @@ const server = app.listen(port, () => console.log(`lISTENING TO PORT ${port}`));
 // handlers no longer call process.exit (see analytics.service.js / houseOwnerAnalytics.service.js);
 // they only run their idempotent shutdown(), which we also invoke here.
 const audit = require('./src/services/audit.service');
-const emailService = require('./src/services/email.service');
-const { getEmailWorkerPool } = require('./src/utils/emailWorkerPool');
 const analyticsService = require('./src/services/analytics.service');
 const houseOwnerAnalyticsService = require('./src/services/houseOwnerAnalytics.service');
 
 const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 15000;
-const EMAIL_DRAIN_TIMEOUT_MS = parseInt(process.env.EMAIL_DRAIN_TIMEOUT_MS, 10) || 5000;
 
-async function drainEmailQueue(deadline) {
-  try {
-    while (Date.now() < deadline) {
-      const s = emailService.getQueueStats();
-      if (s.queued === 0 && s.processing === 0) return;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-  } catch (_) { /* best-effort */ }
-}
+// NOTE: no email drain step anymore — emails live in the durable `email_outbox`
+// table the moment they are queued (see src/services/email.service.js), and a
+// cPanel cron job (scripts/process-email-queue.js) delivers them. Restarts can
+// no longer lose queued mail, so shutdown has nothing email-related to wait for.
 
 async function gracefulShutdown(signal) {
   if (shuttingDown) return;
@@ -215,21 +225,17 @@ async function gracefulShutdown(signal) {
   );
   console.log('[shutdown] HTTP server closed');
 
-  // 2. Best-effort drain of queued/in-flight emails.
-  await drainEmailQueue(Date.now() + EMAIL_DRAIN_TIMEOUT_MS);
-
-  // 3. Flush buffered audit rows.
+  // 2. Flush buffered audit rows.
   try { await audit.shutdown(); } catch (e) { console.error('[shutdown] audit:', e.message); }
 
-  // 4. Terminate worker pools.
+  // 3. Terminate worker pools (analytics only — email is cron-drained now).
   await Promise.allSettled([
-    getEmailWorkerPool().terminate(),
     analyticsService.shutdown(),
     houseOwnerAnalyticsService.shutdown(),
   ]);
   console.log('[shutdown] worker pools terminated');
 
-  // 5. Destroy knex pool LAST (drain/flush steps may hit DB).
+  // 4. Destroy knex pool LAST (drain/flush steps may hit DB).
   try { await db.destroy(); console.log('[shutdown] knex pool destroyed'); }
   catch (e) { console.error('[shutdown] db.destroy error:', e.message); }
 
@@ -240,3 +246,16 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// --- Process-level safety net ---
+// Node crashes on an unhandled rejection by default (v15+), and an uncaught
+// exception in a stray callback (worker message, stream 'error', timer) would
+// otherwise terminate the whole app. Log and keep serving so one bad request
+// can't take the site down. The known root causes (worker pool, multipart) are
+// fixed at the source; this is the last-resort guard, not the primary defense.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});

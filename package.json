@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "migrate": "prisma migrate dev",
     "seed": "node src/database/seeds/initial_seed.js",
+    "seed:test": "node src/database/seeds/test_data_seed.js",
     "prod:migrate": "prisma migrate deploy",
     "prod:seed": "node prisma/seed.js"
   },

@@ -318,11 +318,10 @@ process.on('SIGINT', async () => {
   await analyticsService.shutdown();
 });
 
-// Handle uncaught errors
-process.on('uncaughtException', async (error) => {
-  console.error('Uncaught exception in analytics service:', error);
-  await analyticsService.shutdown();
-  process.exit(1);
-});
+// NOTE: this module used to register a process-wide 'uncaughtException' handler
+// that called process.exit(1). That meant ANY stray error anywhere in the app
+// took the whole server down. Process-level error handling now lives ONLY in
+// server.js (the single owner of process lifecycle); a leaf service must not
+// force-exit the process.
 
 module.exports = analyticsService;

@@ -11,9 +11,9 @@ router.use(authMiddleware);
 router.use(roleMiddleware(['web_owner', 'developer']));
 
 // Email queue stats (must be before /:key)
-router.get('/email-stats', (req, res) => {
+router.get('/email-stats', async (req, res) => {
     try {
-        const queueStats = EmailService.getQueueStats();
+        const queueStats = await EmailService.getQueueStats();
         const workerStats = EmailService.getWorkerStats();
         res.json({
             success: true,

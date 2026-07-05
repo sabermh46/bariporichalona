@@ -182,10 +182,26 @@ class AppFeePaymentController {
                 .select('u.id');
             
             const results = [];
-            
+
+            // Billing period being generated (start_date is the 10th of NEXT month).
+            // calculateDueAmount's hasPendingPayment only checks CURRENT-month
+            // start_dates, so it can never see rows this generator created — that
+            // mismatch caused duplicate fees on every re-run (double-billing).
+            // Dedupe explicitly: at most ONE monthly_subscription row per owner
+            // per billing month, regardless of status (deleted rows excluded).
+            const startMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+
             for (const owner of houseOwners) {
+                const existingForPeriod = await trx('app_fee_payment')
+                    .where('house_owner_id', owner.id)
+                    .andWhere('fee_type', 'monthly_subscription')
+                    .whereNull('deleted_at')
+                    .andWhereRaw("DATE_FORMAT(start_date, '%Y-%m') = ?", [startMonth])
+                    .first();
+                if (existingForPeriod) continue;
+
                 const calculation = await this.calculateDueAmount(owner.id);
-                
+
                 if (calculation && calculation.activeHouseCount > 0 && !calculation.hasPendingPayment) {
                     const paymentData = {
                         uuid: uuidv4(),

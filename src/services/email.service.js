@@ -1,125 +1,121 @@
 // src/services/email.service.js
-const { getEmailWorkerPool } = require('../utils/emailWorkerPool');
+//
+// Email is delivered via a DURABLE OUTBOX, not an in-process queue/worker pool.
+// sendEmail()/queueEmail() only INSERT a row into `email_outbox` and return
+// immediately; a cPanel cron job (scripts/process-email-queue.js) claims and
+// sends pending rows. Benefits: no SMTP/PDF work or worker threads in the web
+// process, and queued mail survives Passenger restarts (previously it was lost).
+const db = require('../config/knex');
 
-const MAX_RETRIES = 3;
-const CONCURRENT_SENDS = 2;
-const MAX_QUEUE_SIZE = 500; // prevent unbounded growth when SMTP is down
+const MAX_ATTEMPTS = parseInt(process.env.EMAIL_MAX_ATTEMPTS, 10) || 3;
+// Hard cap on a single serialized row (html + base64 attachments) to keep one
+// oversized attachment from bloating the table / blowing the MySQL packet size.
+const MAX_ROW_BYTES = parseInt(process.env.EMAIL_MAX_ROW_BYTES, 10) || 8 * 1024 * 1024;
 
 class EmailService {
   constructor() {
-    this.queue = [];
-    this.processing = new Set();
-    this.stats = { queued: 0, sent: 0, failed: 0, dropped: 0 };
-    this._jobId = 0;
+    // Process-local counters; authoritative counts come from the DB in getQueueStats().
+    this.stats = { enqueued: 0, dropped: 0 };
   }
 
-  _nextId() {
-    return `email-${Date.now()}-${++this._jobId}`;
-  }
-
-  _createJob(to, subject, html, text, metadata, attachments = null) {
-    const job = {
-      id: this._nextId(),
-      to,
-      subject,
-      html,
-      text: text || null,
-      metadata: metadata || {},
-      retryCount: 0,
-    };
-    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
-      job.attachments = attachments.map((a) => ({
-        filename: a.filename || "attachment",
-        content: Buffer.isBuffer(a.content) ? a.content.toString("base64") : a.content,
-      }));
+  _serializeAttachments(attachments) {
+    if (!attachments || !Array.isArray(attachments) || attachments.length === 0) {
+      return null;
     }
-    return job;
+    const normalized = attachments.map((a) => ({
+      filename: a.filename || 'attachment',
+      content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : a.content,
+    }));
+    return JSON.stringify(normalized);
   }
 
   /**
-   * Queue an email for delivery (non-blocking).
-   * Returns immediately with { queued: true, id }.
-   * attachments: optional array of { filename, content: Buffer } (content serialized as base64 for worker).
+   * Enqueue an email into the durable outbox (non-blocking, never throws to
+   * fire-and-forget callers). Returns { queued: true, id } or { queued: false, dropped: true }.
+   * attachments: optional array of { filename, content: Buffer } (stored as base64).
    */
-  queueEmail(to, subject, html, text = null, metadata = {}, attachments = null) {
-    if (this.queue.length >= MAX_QUEUE_SIZE) {
+  async queueEmail(to, subject, html, text = null, metadata = {}, attachments = null) {
+    try {
+      const safeMetadata = metadata && typeof metadata === 'object' ? { ...metadata } : {};
+      const attachmentsJson = this._serializeAttachments(attachments);
+
+      const approxBytes =
+        (html ? Buffer.byteLength(html) : 0) + (attachmentsJson ? attachmentsJson.length : 0);
+      if (approxBytes > MAX_ROW_BYTES) {
+        this.stats.dropped++;
+        console.error(`Email payload too large (${approxBytes} bytes) for: ${to}. Dropped.`);
+        return { queued: false, dropped: true };
+      }
+
+      const [id] = await db('email_outbox').insert({
+        to_email: to,
+        subject,
+        html: html == null ? '' : html,
+        text: text || null,
+        metadata: Object.keys(safeMetadata).length ? JSON.stringify(safeMetadata) : null,
+        attachments: attachmentsJson,
+        status: 'pending',
+        attempts: 0,
+        max_attempts: MAX_ATTEMPTS,
+        next_attempt_at: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+      this.stats.enqueued++;
+      return { queued: true, id: id != null ? String(id) : null };
+    } catch (err) {
+      // Never throw: callers fire-and-forget. Log so the failure is visible.
       this.stats.dropped++;
-      console.error(`Email queue full (${MAX_QUEUE_SIZE}). Dropping email to: ${to}`);
+      console.error('Failed to enqueue email to', to, '-', err.message);
       return { queued: false, dropped: true };
     }
-    const safeMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {};
-    const job = this._createJob(to, subject, html, text, safeMetadata, attachments);
-    this.queue.push(job);
-    this.stats.queued++;
-    this._processQueue();
-    return { queued: true, id: job.id };
   }
 
   /**
-   * Send email (default: queued, fire-and-forget).
-   * metadata may include: type, table_name, row_id (for emaillog tracking), and other fields.
-   * attachments: optional array of { filename, content: Buffer } to attach to the email.
+   * Send email (enqueues into the outbox; delivered by the cron drainer).
+   * metadata may include: type, table_name, row_id (for emaillog tracking).
+   * attachments: optional array of { filename, content: Buffer }.
    */
   async sendEmail(to, subject, html, text = null, metadata = {}, attachments = null) {
-    if (!to || typeof to !== "string") {
+    if (!to || typeof to !== 'string') {
       throw new Error('EmailService.sendEmail: "to" is required and must be a string');
     }
-    if (!subject || typeof subject !== "string") {
+    if (!subject || typeof subject !== 'string') {
       throw new Error('EmailService.sendEmail: "subject" is required and must be a string');
     }
-    if (!html && html !== "") {
+    if (html == null) {
       throw new Error('EmailService.sendEmail: "html" is required');
     }
     return this.queueEmail(to, subject, html, text, metadata, attachments);
   }
 
-  async _processQueue() {
-    if (this.processing.size >= CONCURRENT_SENDS || this.queue.length === 0) return;
-
-    const job = this.queue.shift();
-    this.processing.add(job.id);
-
-    const pool = getEmailWorkerPool();
-
-    pool.execute("sendEmail", {
-      to: job.to,
-      subject: job.subject,
-      html: job.html,
-      text: job.text,
-      metadata: job.metadata,
-      attachments: job.attachments || null,
-    }).then((result) => {
-      this.stats.sent++;
-      console.log('Email sent to', job.to, result?.messageId || '');
-    }).catch((err) => {
-      if (job.retryCount < MAX_RETRIES) {
-        job.retryCount++;
-        this.queue.unshift(job);
-        console.warn(`Email retry ${job.retryCount}/${MAX_RETRIES} for ${job.to}:`, err.message);
-      } else {
-        this.stats.failed++;
-        console.error('Email failed after retries:', job.to, err.message);
-      }
-    }).finally(() => {
-      this.processing.delete(job.id);
-      this._processQueue();
-    });
+  /** Outbox stats for monitoring (counts by status). Async — reads the DB. */
+  async getQueueStats() {
+    try {
+      const rows = await db('email_outbox')
+        .select('status')
+        .count({ n: '*' })
+        .groupBy('status');
+      const byStatus = rows.reduce((acc, r) => {
+        acc[r.status] = Number(r.n);
+        return acc;
+      }, {});
+      return {
+        pending: byStatus.pending || 0,
+        processing: byStatus.processing || 0,
+        sent: byStatus.sent || 0,
+        failed: byStatus.failed || 0,
+        enqueuedThisRun: this.stats.enqueued,
+        droppedThisRun: this.stats.dropped,
+      };
+    } catch (err) {
+      return { error: err.message };
+    }
   }
 
-  /** Queue stats for monitoring */
-  getQueueStats() {
-    return {
-      queued: this.queue.length,
-      processing: this.processing.size,
-      sent: this.stats.sent,
-      failed: this.stats.failed,
-      dropped: this.stats.dropped,
-    };
-  }
-
-  /** Worker pool stats (workers, queue length, etc.) */
+  /** Delivery mode info (no in-process workers anymore). */
   getWorkerStats() {
-    return getEmailWorkerPool().getStats();
+    return { mode: 'cron-outbox', workers: 0, note: 'Delivered by scripts/process-email-queue.js' };
   }
 
   async sendPasswordResetEmail(email, resetToken, name = null) {

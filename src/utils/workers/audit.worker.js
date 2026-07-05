@@ -1,6 +1,6 @@
 // utils/workers/audit.worker.js
 // Worker thread that performs audit-log inserts off the request path.
-// Mirrors email.worker.js: owns its OWN knex connection, resilient on signals.
+// Owns its OWN knex connection, resilient on signals.
 const { parentPort } = require('worker_threads');
 const knex = require('knex');
 const path = require('path');
