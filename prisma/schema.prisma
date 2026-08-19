@@ -173,7 +173,7 @@ model flat {
   number              String?
   metadata            String?           @db.LongText
   createdAt           DateTime          @default(now())
-  updatedAt           DateTime
+  updatedAt           DateTime @default(now())
   name                String
   last_rent_paid_date DateTime?
   late_fee_percentage Decimal?          @default(5.00) @db.Decimal(5, 2)
@@ -230,7 +230,7 @@ model house {
   address             String
   metadata            String?               @db.LongText
   createdAt           DateTime              @default(now())
-  updatedAt           DateTime
+  updatedAt           DateTime @default(now())
   flatCount           BigInt                @default(0)
   active              Boolean               @default(false)
   name                String                @default("Unnamed House") @db.VarChar(255)
@@ -294,7 +294,7 @@ model permission {
   key                           String                          @unique(map: "Permission_key_key")
   description                   String?
   createdAt                     DateTime                        @default(now())
-  updatedAt                     DateTime
+  updatedAt                     DateTime @default(now())
   caretakerassignmentpermission caretakerassignmentpermission[]
   rolepermission                rolepermission[]
   staffpermission               staffpermission[]
@@ -390,7 +390,7 @@ model renter {
   metadata         String?           @db.LongText
   createdBy        BigInt?
   createdAt        DateTime          @default(now())
-  updatedAt        DateTime
+  updatedAt        DateTime @default(now())
   flat             flat[]
   rent_payments    rent_payment[]
   user             user?             @relation(fields: [createdBy], references: [id], map: "Renter_createdBy_fkey")
@@ -407,7 +407,7 @@ model role {
   rank           Int
   description    String?
   createdAt      DateTime         @default(now())
-  updatedAt      DateTime
+  updatedAt      DateTime @default(now())
   rolepermission rolepermission[]
   user           user[]
   userloginas    userloginas[]
@@ -421,7 +421,7 @@ model rolelimit {
   maxFlats      Int      @default(10)
   canLoginAs    String?  @db.LongText
   createdAt     DateTime @default(now())
-  updatedAt     DateTime
+  updatedAt     DateTime @default(now())
 
   @@index([roleSlug], map: "RoleLimit_roleSlug_idx")
 }
@@ -435,7 +435,7 @@ model passwordresettoken {
   used      Boolean   @default(false)
   usedAt    DateTime?
   createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  updatedAt DateTime  @updatedAt @default(now())
 
   user  user   @relation(fields: [userId], references: [id], onDelete: Cascade)
   users user[] @relation("passwordresettoken_userIdTouser")
@@ -559,7 +559,7 @@ model systemsetting {
   category  String   @default("general")
   isPublic  Boolean  @default(false)
   createdAt DateTime @default(now())
-  updatedAt DateTime
+  updatedAt DateTime @default(now())
 
   @@index([category], map: "SystemSetting_category_idx")
   @@index([key], map: "SystemSetting_key_idx")
@@ -596,7 +596,7 @@ model user {
   lastLoginIp                                               String?               @db.VarChar(45)
   metadata                                                  String?               @db.LongText
   createdAt                                                 DateTime              @default(now())
-  updatedAt                                                 DateTime
+  updatedAt                                                 DateTime @default(now())
   deletedAt                                                 DateTime?
   app_fee_payments_houseOwner                               app_fee_payment[]     @relation("AppFeePayment_houseOwner")
   app_fee_payments_verified                                 app_fee_payment[]     @relation("AppFeePayment_verifier")
@@ -722,7 +722,7 @@ model house_loan {
   status          String    @default("active")
   metadata        String?   @db.LongText
   created_at      DateTime  @default(now())
-  updated_at      DateTime  @updatedAt
+  updated_at      DateTime  @updatedAt @default(now())
 
   house    house                @relation(fields: [house_id], references: [id])
   payments house_loan_payment[]
@@ -739,7 +739,7 @@ model house_loan_payment {
   transaction_id String?  @db.VarChar(255)
   notes          String?  @db.Text
   created_at     DateTime @default(now())
-  updated_at     DateTime @updatedAt
+  updated_at     DateTime @updatedAt @default(now())
 
   loan house_loan @relation(fields: [loan_id], references: [id], onDelete: Cascade)
 
